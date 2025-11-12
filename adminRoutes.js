@@ -1,8 +1,8 @@
-// ! Arquivo: adminRoutes.js
+// ! Arquivo: adminRoutes.js (CRUD COMPLETO)
 const express = require('express');
 const router = express.Router();
 const mysql = require('mysql2/promise');
-const { protectAdmin } = require('./adminAuthMiddleware'); // <-- Importa a proteção de Admin
+const { protectAdmin } = require('./adminAuthMiddleware'); 
 
 // ! Configuração do Banco de Dados
 const dbConfig = { 
@@ -15,15 +15,12 @@ const dbConfig = {
 const pool = mysql.createPool(dbConfig);
 
 // -------------------------------------------------------------------
-// ROTAS DE CIDADES (CRUD Admin)
+// ROTAS DE GESTÃO DE CIDADES (CRUD)
 // -------------------------------------------------------------------
 
-// CRIAR Nova Cidade (POST /api/admin/cities)
+// CREATE (Criação existente)
 router.post('/admin/cities', protectAdmin, async (req, res) => {
     const { name, state_province } = req.body;
-    if (!name || !state_province) {
-        return res.status(400).json({ success: false, message: 'Nome e Estado são obrigatórios.' });
-    }
     try {
         const [result] = await pool.execute(
             'INSERT INTO cities (name, state_province) VALUES (?, ?)',
@@ -31,7 +28,7 @@ router.post('/admin/cities', protectAdmin, async (req, res) => {
         );
         res.status(201).json({ success: true, message: 'Cidade criada com sucesso.', city_id: result.insertId });
     } catch (error) {
-        if (error.errno === 1062) {
+        if (error.errno === 1062) { 
             return res.status(409).json({ success: false, message: 'Esta cidade já existe.' });
         }
         console.error('Erro ao criar cidade:', error);
@@ -39,17 +36,26 @@ router.post('/admin/cities', protectAdmin, async (req, res) => {
     }
 });
 
-// ATUALIZAR Cidade (PUT /api/admin/cities/:id)
+// READ (Listar todas as cidades para o painel de gestão)
+router.get('/admin/cities', protectAdmin, async (req, res) => {
+    try {
+        const [cities] = await pool.execute('SELECT * FROM cities ORDER BY name');
+        res.status(200).json({ success: true, data: cities });
+    } catch (error) {
+        console.error('Erro ao listar cidades:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao listar cidades.' });
+    }
+});
+
+// UPDATE (Editar cidade)
 router.put('/admin/cities/:id', protectAdmin, async (req, res) => {
     const cityId = req.params.id;
-    const { name, state_province, is_active } = req.body;
-
+    const { name, state_province, is_active } = req.body; // is_active é opcional
     try {
         const [result] = await pool.execute(
-            'UPDATE cities SET name=?, state_province=?, is_active=? WHERE id=?',
+            'UPDATE cities SET name = ?, state_province = ?, is_active = COALESCE(?, is_active) WHERE id = ?',
             [name, state_province, is_active, cityId]
         );
-
         if (result.affectedRows === 0) {
             return res.status(404).json({ success: false, message: 'Cidade não encontrada.' });
         }
@@ -60,36 +66,33 @@ router.put('/admin/cities/:id', protectAdmin, async (req, res) => {
     }
 });
 
-// DELETAR/Inativar Cidade (DELETE /api/admin/cities/:id)
+// DELETE (Excluir cidade)
 router.delete('/admin/cities/:id', protectAdmin, async (req, res) => {
     const cityId = req.params.id;
-
     try {
-        const [result] = await pool.execute(
-            'UPDATE cities SET is_active = FALSE WHERE id = ?',
-            [cityId]
-        );
-
+        const [result] = await pool.execute('DELETE FROM cities WHERE id = ?', [cityId]);
+        
         if (result.affectedRows === 0) {
             return res.status(404).json({ success: false, message: 'Cidade não encontrada.' });
         }
-        res.status(200).json({ success: true, message: 'Cidade inativada com sucesso.' });
+        res.status(200).json({ success: true, message: 'Cidade excluída com sucesso.' });
     } catch (error) {
-        console.error('Erro ao inativar cidade:', error);
-        res.status(500).json({ success: false, message: 'Erro interno ao inativar cidade.' });
+        // Erro 1451: Restrição de chave estrangeira (ainda há bairros ou usuários linkados)
+        if (error.errno === 1451) {
+             return res.status(409).json({ success: false, message: 'Não é possível excluir: existem Bairros ou Usuários vinculados a esta cidade.' });
+        }
+        console.error('Erro ao excluir cidade:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao excluir cidade.' });
     }
 });
 
 // -------------------------------------------------------------------
-// ROTAS DE BAIRROS (CRUD Admin)
+// ROTAS DE GESTÃO DE BAIRROS (CRUD)
 // -------------------------------------------------------------------
 
-// CRIAR Novo Bairro (POST /api/admin/districts)
+// CREATE (Criação existente)
 router.post('/admin/districts', protectAdmin, async (req, res) => {
     const { city_id, name } = req.body;
-    if (!city_id || !name) {
-        return res.status(400).json({ success: false, message: 'ID da Cidade e Nome do Bairro são obrigatórios.' });
-    }
     try {
         const [result] = await pool.execute(
             'INSERT INTO districts (city_id, name) VALUES (?, ?)',
@@ -105,17 +108,31 @@ router.post('/admin/districts', protectAdmin, async (req, res) => {
     }
 });
 
-// ATUALIZAR Bairro (PUT /api/admin/districts/:id)
+// READ (Listar todos os bairros para o painel de gestão - com nome da cidade)
+router.get('/admin/districts', protectAdmin, async (req, res) => {
+    try {
+        const [districts] = await pool.execute(
+            `SELECT d.*, c.name AS city_name, c.state_province 
+             FROM districts d
+             JOIN cities c ON d.city_id = c.id
+             ORDER BY c.name, d.name`
+        );
+        res.status(200).json({ success: true, data: districts });
+    } catch (error) {
+        console.error('Erro ao listar bairros:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao listar bairros.' });
+    }
+});
+
+// UPDATE (Editar bairro)
 router.put('/admin/districts/:id', protectAdmin, async (req, res) => {
     const districtId = req.params.id;
-    const { name, is_active } = req.body;
-
+    const { name, city_id } = req.body;
     try {
         const [result] = await pool.execute(
-            'UPDATE districts SET name=?, is_active=? WHERE id=?',
-            [name, is_active, districtId]
+            'UPDATE districts SET name = ?, city_id = ? WHERE id = ?',
+            [name, city_id, districtId]
         );
-
         if (result.affectedRows === 0) {
             return res.status(404).json({ success: false, message: 'Bairro não encontrado.' });
         }
@@ -126,42 +143,19 @@ router.put('/admin/districts/:id', protectAdmin, async (req, res) => {
     }
 });
 
-// DELETAR/Inativar Bairro (DELETE /api/admin/districts/:id)
+// DELETE (Excluir bairro)
 router.delete('/admin/districts/:id', protectAdmin, async (req, res) => {
     const districtId = req.params.id;
-
     try {
-        const [result] = await pool.execute(
-            'UPDATE districts SET is_active = FALSE WHERE id = ?',
-            [districtId]
-        );
-
+        const [result] = await pool.execute('DELETE FROM districts WHERE id = ?', [districtId]);
+        
         if (result.affectedRows === 0) {
             return res.status(404).json({ success: false, message: 'Bairro não encontrado.' });
         }
-        res.status(200).json({ success: true, message: 'Bairro inativado com sucesso.' });
+        res.status(200).json({ success: true, message: 'Bairro excluído com sucesso.' });
     } catch (error) {
-        console.error('Erro ao inativar bairro:', error);
-        res.status(500).json({ success: false, message: 'Erro interno ao inativar bairro.' });
-    }
-});
-
-// -------------------------------------------------------------------
-// ROTA PÚBLICA: Listar Cidades Disponíveis (Usada pelo Frontend)
-// -------------------------------------------------------------------
-
-router.get('/cities', async (req, res) => {
-    try {
-        // Busca todas as cidades ativas, retornando ID, Nome e Estado
-        const [cities] = await pool.execute(
-            'SELECT id, name, state_province FROM cities WHERE is_active = TRUE ORDER BY name'
-        );
-        
-        res.status(200).json({ success: true, data: cities });
-
-    } catch (error) {
-        console.error('Erro ao buscar lista de cidades:', error);
-        res.status(500).json({ success: false, message: 'Erro ao carregar cidades.' });
+        console.error('Erro ao excluir bairro:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao excluir bairro.' });
     }
 });
 
