@@ -61,7 +61,7 @@ router.get('/admin/cities', protectAdmin, async (req, res) => {
     try {
         const [cities] = await pool.execute('SELECT * FROM cities ORDER BY name');
         res.status(200).json({ success: true, data: cities });
-    } catch (error) T_
+    } catch (error) { // <-- CORREÇÃO: "T_" removido daqui
         console.error('Erro ao listar cidades:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao listar cidades.' });
     }
