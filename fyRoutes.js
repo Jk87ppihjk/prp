@@ -1,11 +1,18 @@
-// ! Arquivo: fyRoutes.js
+// ! Arquivo: fyRoutes.js (COM A CORREÇÃO DO DBCONFIG)
 const express = require('express');
 const router = express.Router();
 const mysql = require('mysql2/promise');
 const { protectSeller } = require('./sellerAuthMiddleware'); 
 const { protect } = require('./authMiddleware'); // Proteção geral para likes/comentários
 
-const dbConfig = { /* ... */ };
+// ! Configuração do Banco de Dados (CORRIGIDA)
+const dbConfig = { 
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    connectionLimit: 10,
+}; 
 const pool = mysql.createPool(dbConfig);
 
 
