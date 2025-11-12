@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const mysql = require('mysql2/promise');
-const { protectSeller } = require('./sellerAuthMiddleware'); // Protege acesso apenas a lojistas
+const { protectSeller } = require('./sellerAuthMiddleware'); 
 
 // ! Configuração do Banco de Dados
 const dbConfig = { 
@@ -15,7 +15,44 @@ const dbConfig = {
 const pool = mysql.createPool(dbConfig);
 
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DA LOJA (PROTEGIDAS POR protectSeller)
+// ROTA PÚBLICA: Detalhes de uma Loja E Seus Produtos
+// -------------------------------------------------------------------
+
+// 4. LER Detalhes da Loja e Produtos (GET /api/stores/:id)
+router.get('/stores/:id', async (req, res) => {
+    const store_id = req.params.id;
+
+    try {
+        // 1. Buscar os detalhes da loja
+        const [storeRows] = await pool.execute('SELECT * FROM stores WHERE id = ? AND is_active = TRUE', [store_id]);
+
+        if (storeRows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Loja não encontrada ou inativa.' });
+        }
+
+        const store = storeRows[0];
+
+        // 2. Buscar todos os produtos ativos dessa loja (usando o seller_id)
+        const [products] = await pool.execute(
+            'SELECT id, name, description, price, stock_quantity, image_url FROM products WHERE seller_id = ? AND is_active = TRUE',
+            [store.seller_id]
+        );
+
+        // 3. Combinar e retornar os dados
+        res.status(200).json({ 
+            success: true, 
+            store: store,
+            products: products 
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar detalhes da loja:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao buscar detalhes da loja.' });
+    }
+});
+
+// -------------------------------------------------------------------
+// ROTAS DE GESTÃO DA LOJA (PROTEGIDAS)
 // -------------------------------------------------------------------
 
 // 1. CRIAR Loja (POST /api/stores)
@@ -28,13 +65,11 @@ router.post('/stores', protectSeller, async (req, res) => {
     }
 
     try {
-        // Checa se a loja já existe para evitar duplicidade
         const [existingStore] = await pool.execute('SELECT id FROM stores WHERE seller_id = ?', [seller_id]);
         if (existingStore.length > 0) {
             return res.status(409).json({ success: false, message: 'Você já possui uma loja cadastrada. Use a rota PUT para atualizar.' });
         }
 
-        // Insere a nova loja
         const [result] = await pool.execute(
             `INSERT INTO stores (seller_id, name, bio, address_line1, logo_url, banner_url) 
              VALUES (?, ?, ?, ?, ?, ?)`,
@@ -62,7 +97,6 @@ router.get('/stores/mine', protectSeller, async (req, res) => {
         const [store] = await pool.execute('SELECT * FROM stores WHERE seller_id = ?', [seller_id]);
 
         if (store.length === 0) {
-            // Este é o status 404 que o frontend no painel.html usa para saber que deve CRIAR a loja.
             return res.status(404).json({ success: false, message: 'Loja não encontrada para este usuário.' });
         }
 
@@ -78,7 +112,7 @@ router.get('/stores/mine', protectSeller, async (req, res) => {
 // 3. ATUALIZAR a Loja (PUT /api/stores/:id)
 router.put('/stores/:id', protectSeller, async (req, res) => {
     const store_id = req.params.id;
-    const seller_id = req.user.id; // Garante que o usuário logado é o dono da loja
+    const seller_id = req.user.id; 
 
     const { name, bio, address_line1, logo_url, banner_url } = req.body;
 
@@ -87,7 +121,6 @@ router.put('/stores/:id', protectSeller, async (req, res) => {
     }
 
     try {
-        // Atualiza a loja, verificando o ID da loja E do lojista
         const [result] = await pool.execute(
             `UPDATE stores 
              SET name=?, bio=?, address_line1=?, logo_url=?, banner_url=?, updated_at=NOW()
@@ -108,9 +141,8 @@ router.put('/stores/:id', protectSeller, async (req, res) => {
 });
 
 
-// 4. Rota para LISTAR TODAS as Lojas (PÚBLICA)
+// 5. Rota para LISTAR TODAS as Lojas (PÚBLICA)
 router.get('/stores', async (req, res) => {
-    // Note: Esta rota é pública e não usa middleware de proteção
     try {
         const [stores] = await pool.execute(
             `SELECT id, name, bio, address_line1, logo_url, banner_url 
@@ -125,5 +157,6 @@ router.get('/stores', async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro interno ao buscar lista de lojas.' });
     }
 });
+
 
 module.exports = router;
