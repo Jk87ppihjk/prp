@@ -1,4 +1,4 @@
-// ! Arquivo: adminRoutes.js (CRUD COMPLETO)
+// ! Arquivo: adminRoutes.js (CRUD COMPLETO E CORRIGIDO)
 const express = require('express');
 const router = express.Router();
 const mysql = require('mysql2/promise');
@@ -15,10 +15,29 @@ const dbConfig = {
 const pool = mysql.createPool(dbConfig);
 
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DE CIDADES (CRUD)
+// ROTA PÚBLICA PARA LISTAR CIDADES (Usada no Login/Cadastro)
+// -------------------------------------------------------------------
+// Esta rota é PÚBLICA e responde em GET /api/cities
+router.get('/cities', async (req, res) => {
+    try {
+        // Seleciona apenas cidades ativas para o frontend
+        const [cities] = await pool.execute(
+            'SELECT id, name, state_province FROM cities WHERE is_active = TRUE ORDER BY name'
+        );
+        res.status(200).json({ success: true, data: cities });
+    } catch (error) {
+        console.error('Erro ao listar cidades públicas:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao listar cidades.' });
+    }
+});
+
+
+// -------------------------------------------------------------------
+// ROTAS DE GESTÃO DE CIDADES (CRUD) - PROTEGIDAS
 // -------------------------------------------------------------------
 
 // CREATE (Criação existente)
+// Responde em POST /api/admin/cities
 router.post('/admin/cities', protectAdmin, async (req, res) => {
     const { name, state_province } = req.body;
     try {
@@ -37,17 +56,19 @@ router.post('/admin/cities', protectAdmin, async (req, res) => {
 });
 
 // READ (Listar todas as cidades para o painel de gestão)
+// Responde em GET /api/admin/cities
 router.get('/admin/cities', protectAdmin, async (req, res) => {
     try {
         const [cities] = await pool.execute('SELECT * FROM cities ORDER BY name');
         res.status(200).json({ success: true, data: cities });
-    } catch (error) {
+    } catch (error) T_
         console.error('Erro ao listar cidades:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao listar cidades.' });
     }
 });
 
 // UPDATE (Editar cidade)
+// Responde em PUT /api/admin/cities/:id
 router.put('/admin/cities/:id', protectAdmin, async (req, res) => {
     const cityId = req.params.id;
     const { name, state_province, is_active } = req.body; // is_active é opcional
@@ -67,6 +88,7 @@ router.put('/admin/cities/:id', protectAdmin, async (req, res) => {
 });
 
 // DELETE (Excluir cidade)
+// Responde em DELETE /api/admin/cities/:id
 router.delete('/admin/cities/:id', protectAdmin, async (req, res) => {
     const cityId = req.params.id;
     try {
@@ -87,7 +109,7 @@ router.delete('/admin/cities/:id', protectAdmin, async (req, res) => {
 });
 
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DE BAIRROS (CRUD)
+// ROTAS DE GESTÃO DE BAIRROS (CRUD) - PROTEGIDAS
 // -------------------------------------------------------------------
 
 // CREATE (Criação existente)
