@@ -1,4 +1,4 @@
-// ! Arquivo: storeRoutes.js (VERSÃO CORRIGIDA E COMPLETA)
+// ! Arquivo: storeRoutes.js (VERSÃO FINAL COM ROTA PÚBLICA)
 const express = require('express');
 const router = express.Router();
 const mysql = require('mysql2/promise');
@@ -14,6 +14,53 @@ const dbConfig = {
 }; 
 const pool = mysql.createPool(dbConfig);
 
+
+// -------------------------------------------------------------------
+// ROTA PÚBLICA (para store_profile.html)
+// -------------------------------------------------------------------
+/**
+ * Rota para BUSCAR um perfil de loja pública e seus produtos (GET /api/stores/:id)
+ */
+router.get('/stores/:id', async (req, res) => {
+    const storeId = req.params.id;
+
+    try {
+        // 1. Buscar os dados da Loja
+        const [storeRows] = await pool.execute(
+            'SELECT id, name, bio, address_line1, logo_url, banner_url, seller_id FROM stores WHERE id = ? LIMIT 1', 
+            [storeId]
+        );
+
+        if (storeRows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Loja não encontrada.' });
+        }
+        
+        const store = storeRows[0];
+        
+        // 2. Buscar os produtos ATIVOS associados a essa loja (usando o seller_id da loja)
+        const [productRows] = await pool.execute(
+            'SELECT id, name, description, price, image_url FROM products WHERE seller_id = ? AND is_active = TRUE',
+            [store.seller_id]
+        );
+
+        // 3. Enviar a resposta completa
+        res.status(200).json({
+            success: true,
+            store: store,
+            products: productRows
+        });
+
+    } catch (error) {
+        console.error('[STORES] Erro ao buscar perfil público da loja:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao buscar dados da loja.' });
+    }
+});
+
+
+// -------------------------------------------------------------------
+// ROTAS PRIVADAS (para painel.html)
+// -------------------------------------------------------------------
+
 /**
  * 1. Rota para BUSCAR a loja do lojista logado (GET /api/stores/mine)
  * Usado pelo painel.html para carregar os dados
@@ -27,7 +74,6 @@ router.get('/stores/mine', protectSeller, async (req, res) => {
         );
         
         if (rows.length === 0) {
-            // Isso não é um erro, é o estado "loja não criada" que o painel.html espera
             return res.status(404).json({ success: false, message: 'Nenhuma loja encontrada para este lojista.' });
         }
         
@@ -52,7 +98,6 @@ router.post('/stores', protectSeller, async (req, res) => {
     }
 
     try {
-        // Verifica se já existe uma loja (Regra de Negócio)
         const [existing] = await pool.execute('SELECT id FROM stores WHERE seller_id = ?', [seller_id]);
         if (existing.length > 0) {
             return res.status(409).json({ success: false, message: 'Este lojista já possui uma loja cadastrada.' });
