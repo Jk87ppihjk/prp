@@ -1,6 +1,6 @@
-// ! Arquivo: server.js (Completo e Final)
+// ! Arquivo: server.js (Completo e Final - CORS Corrigido)
 const express = require('express');
-const cors = require('cors');
+const cors = require('cors'); // Middleware para CORS
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -8,13 +8,17 @@ const port = process.env.PORT || 3000;
 const accessRoutes = require('./login'); 
 const productRoutes = require('./productRoutes'); 
 const adminRoutes = require('./adminRoutes'); 
-const storeRoutes = require('./storeRoutes'); // <-- NOVO: Rotas de Loja
-const { protect } = require('./authMiddleware'); // Middleware de autenticação geral
+const storeRoutes = require('./storeRoutes'); 
+const { protect } = require('./authMiddleware'); 
 
-// ! Configuração do CORS
+// -------------------------------------------------------------------
+// ! CONFIGURAÇÃO CORS (SOLUÇÃO)
+// Permite que qualquer origem ('*') acesse a API.
+// -------------------------------------------------------------------
 app.use(cors({
     origin: '*', 
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    // Essencial para o JWT
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -30,7 +34,7 @@ app.use('/api', productRoutes);
 app.use('/api', adminRoutes); 
 
 // --- Rotas de Loja (Cadastro da Loja) ---
-app.use('/api', storeRoutes); // <-- NOVO: Rotas de Loja
+app.use('/api', storeRoutes); 
 
 // -------------------------------------------------------------------
 // Rota de Teste de Autenticação GERAL
