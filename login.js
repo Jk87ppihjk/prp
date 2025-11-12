@@ -21,13 +21,11 @@ const JWT_SECRET = process.env.JWT_SECRET || 'seu_segredo_jwt_padrao';
 const saltRounds = 10; 
 
 // -------------------------------------------------------------------
-// 1. ROTA PÚBLICA: LISTAR CIDADES
-// Esta é a rota que o access.html e seller_login.html chamam.
+// 1. ROTA PÚBLICA: LISTAR CIDADES (CORRIGIDA)
 // -------------------------------------------------------------------
 
 router.get('/cities', async (req, res) => {
     try {
-        // Seleciona as cidades ativas, sem proteção de login
         const [cities] = await pool.execute(
             'SELECT id, name, state_province FROM cities WHERE is_active = TRUE ORDER BY name'
         );
@@ -80,13 +78,11 @@ router.post('/register', async (req, res) => {
 // -------------------------------------------------------------------
 
 router.post('/login', async (req, res) => {
-    const { email, password, city } = req.body; // City é usado apenas para a validação inicial do frontend
+    const { email, password, city } = req.body; 
 
     if (!email || !password) {
         return res.status(400).json({ success: false, message: 'E-mail e senha são obrigatórios.' });
     }
-    
-    // NOTA: Para Admins, o campo 'city' é enviado como 'ADMIN_CITY_GLOBAL' pelo admin_login.html
 
     try {
         const [users] = await pool.execute('SELECT * FROM users WHERE email = ? AND is_active = TRUE', [email]);
@@ -124,10 +120,4 @@ router.post('/login', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Erro de Login:', error);
-        res.status(500).json({ success: false, message: 'Erro interno no processo de login.' });
-    }
-});
-
-
-module.exports = router;
+        console
