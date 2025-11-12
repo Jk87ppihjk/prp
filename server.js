@@ -1,21 +1,20 @@
-// ! Arquivo: server.js (Completo e Final)
+// ! Arquivo: server.js (CORS Permitindo QUALQUER DOMÍNIO)
 const express = require('express');
-const cors = require('cors');
+const cors = require('cors'); // Middleware para CORS
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Importa Rotas e Middlewares
 const accessRoutes = require('./login'); 
 const productRoutes = require('./productRoutes'); 
-const adminRoutes = require('./adminRoutes'); // <-- Rota com /cities e /admin
+const adminRoutes = require('./adminRoutes'); 
 const storeRoutes = require('./storeRoutes'); 
 const { protect } = require('./authMiddleware'); 
 
 // -------------------------------------------------------------------
-// CONFIGURAÇÃO INICIAL
+// ! CONFIGURAÇÃO CORS (SOLUÇÃO DE PROBLEMAS)
+// Permite que qualquer origem ('*') acesse a API e inclui o cabeçalho Authorization
 // -------------------------------------------------------------------
-
-// CORS: Permite qualquer domínio acessar a API
 app.use(cors({
     origin: '*', 
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -24,38 +23,40 @@ app.use(cors({
 
 app.use(express.json());
 
-// -------------------------------------------------------------------
-// INTEGRAÇÃO DE ROTAS
-// -------------------------------------------------------------------
-
-// Rotas de Acesso (Login, Cadastro)
+// --- INTEGRAÇÃO DE ROTAS ---
 app.use('/api', accessRoutes); 
-
-// Rotas de Produtos (Lojistas/Públicas)
 app.use('/api', productRoutes); 
-
-// Rotas de Gestão de Loja (Seller)
+app.use('/api', adminRoutes); // Inclui as rotas /admin/cities e /cities
 app.use('/api', storeRoutes); 
 
-// ! Rotas de Admin (INCLUI /cities e /admin/...)
-app.use('/api', adminRoutes); 
-
-
 // -------------------------------------------------------------------
+// Rota de Teste de Autenticação GERAL
+// -------------------------------------------------------------------
+app.get('/api/user/profile', protect, (req, res) => {
+    res.status(200).json({ 
+        success: true, 
+        message: 'Acesso ao Perfil Autorizado. JWT Válido!',
+        data: {
+            id: req.user.id,
+            email: req.user.email,
+            city: req.user.city
+        }
+    });
+});
+
 // Rota de Teste Pública (Status do Servidor)
-// -------------------------------------------------------------------
 app.get('/', (req, res) => {
-  // Se o servidor estiver ok, ele responde isso
   res.status(200).send('Servidor Marketplace está rodando!');
 });
 
 // -------------------------------------------------------------------
 // Rota de Erro 404 Padrão (IMPORTANTE para debugging)
-// Se nenhuma rota acima funcionar, Express devolve o 404 (Cannot GET)
 // -------------------------------------------------------------------
 app.use((req, res, next) => {
-    res.status(404).send("404: Endpoint não encontrado. Verifique a URL.");
+    // Retorna JSON para o frontend em vez de HTML, prevenindo SyntaxError
+    res.status(404).json({ success: false, message: "404: Endpoint não encontrado. Verifique a URL." });
 });
+
 
 // Inicialização do servidor
 app.listen(port, () => {
