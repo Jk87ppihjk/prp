@@ -1,7 +1,7 @@
-// ! Arquivo: login.js (CORRIGIDO com Checagem de Setup Inicial para Lojistas e Compradores)
+// ! Arquivo: login.js (CORRIGIDO)
 const express = require('express');
 const router = express.Router();
-const mysql = require('mysql2/promise');
+// const mysql = require('mysql2/promise'); // <-- Removido
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken'); 
 const brevoService = require('./brevoService');
@@ -11,18 +11,13 @@ const SALT_ROUNDS = 10;
 const JWT_SECRET = process.env.JWT_SECRET; 
 const TOKEN_EXPIRY = '24h'; 
 
-// ! Configuração do Banco de Dados
-const dbConfig = {
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-};
-const pool = mysql.createPool(dbConfig);
+// ! Importa o pool compartilhado
+const pool = require('./config/db'); // <-- CORREÇÃO: Importa o pool central
 
+/* // ! Configuração do Banco de Dados (REMOVIDA)
+const dbConfig = { ... };
+const pool = mysql.createPool(dbConfig);
+*/
 
 // -------------------------------------------------------------------
 //                          ROTA DE CADASTRO (/api/register)
