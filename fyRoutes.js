@@ -1,18 +1,9 @@
-// ! Arquivo: fyRoutes.js (CORRIGIDO)
+// ! Arquivo: fyRoutes.js (CORRIGIDO - ADICIONADAS ROTAS /store/:storeId e DELETE)
 const express = require('express');
 const router = express.Router();
-// const mysql = require('mysql2/promise'); // <-- Removido
 const { protectSeller } = require('./sellerAuthMiddleware'); 
-const { protect } = require('./authMiddleware'); // Proteção geral para likes/comentários
-
-// ! Importa o pool compartilhado
-const pool = require('./config/db'); // <-- CORREÇÃO: Importa o pool central
-
-/*
-// ! Configuração do Banco de Dados (REMOVIDA)
-const dbConfig = { ... }; 
-const pool = mysql.createPool(dbConfig);
-*/
+const { protect } = require('./authMiddleware'); // Proteção geral
+const pool = require('./config/db'); // Importa o pool compartilhado
 
 // -------------------------------------------------------------------
 // 1. GESTÃO DE VÍDEOS (Lojista)
@@ -48,12 +39,44 @@ router.post('/fy', protectSeller, async (req, res) => {
     }
 });
 
+// ! ==================================================================
+// ! NOVA ROTA ADICIONADA (Chamada pelo painel.html)
+// ! ==================================================================
+// 1.2. LER Vídeos de UMA Loja (GET /api/fy/store/:storeId)
+router.get('/fy/store/:storeId', protectSeller, async (req, res) => {
+    const store_id = req.params.storeId;
+    console.log(`[FY/STORE] Buscando vídeos para a Store ID: ${store_id}`);
+    
+    // Opcional: Validar se o lojista logado é dono desta store_id
+    
+    try {
+        const [videos] = await pool.execute(
+            `SELECT 
+                v.id, v.video_url, v.likes_count, v.created_at,
+                s.name AS store_name, 
+                p.id AS product_id, p.name AS product_name
+             FROM fy_videos v
+             JOIN stores s ON v.store_id = s.id
+             LEFT JOIN products p ON v.product_id = p.id
+             WHERE v.store_id = ?
+             ORDER BY v.created_at DESC`,
+            [store_id]
+        );
+        console.log(`[FY/STORE] Encontrados ${videos.length} vídeos.`);
+        res.status(200).json({ success: true, videos });
+    } catch (error) {
+        console.error('[FY/STORE] Erro ao buscar vídeos da loja:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao carregar vídeos.' });
+    }
+});
+// ! ==================================================================
+
 
 // -------------------------------------------------------------------
 // 2. FEED DE VÍDEOS (Comprador/Público)
 // -------------------------------------------------------------------
 
-// 2.1. LER Feed (GET /api/fy)
+// 2.1. LER Feed PÚBLICO (GET /api/fy)
 router.get('/fy', async (req, res) => {
     try {
         const [videos] = await pool.execute(
@@ -73,6 +96,39 @@ router.get('/fy', async (req, res) => {
     }
 });
 
+// ! ==================================================================
+// ! NOVA ROTA ADICIONADA (Chamada pelo painel.html)
+// ! ==================================================================
+// 2.2. DELETAR um Vídeo Fy (DELETE /api/fy/:id)
+router.delete('/fy/:id', protectSeller, async (req, res) => {
+    const video_id = req.params.id;
+    const seller_id = req.user.id;
+    console.log(`[FY/DELETE] Lojista ${seller_id} tentando deletar vídeo ${video_id}`);
+    
+    try {
+        // Consulta para garantir que o lojista (req.user.id) é dono da loja (stores.id)
+        // que postou o vídeo (fy_videos.id)
+        const [result] = await pool.execute(
+            `DELETE v FROM fy_videos v
+             JOIN stores s ON v.store_id = s.id
+             WHERE v.id = ? AND s.seller_id = ?`,
+            [video_id, seller_id]
+        );
+        
+        if (result.affectedRows === 0) {
+            console.warn(`[FY/DELETE] Falha: Vídeo ${video_id} não encontrado ou lojista ${seller_id} sem permissão.`);
+            return res.status(404).json({ success: false, message: 'Vídeo não encontrado ou você não tem permissão para deletar.' });
+        }
+        
+        console.log(`[FY/DELETE] Sucesso: Vídeo ${video_id} deletado.`);
+        res.status(200).json({ success: true, message: 'Vídeo deletado com sucesso.' });
+    } catch (error) {
+        console.error('[FY/DELETE] Erro ao deletar vídeo:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao deletar o vídeo.' });
+    }
+});
+// ! ==================================================================
+
 
 // -------------------------------------------------------------------
 // 3. INTERAÇÕES SOCIAIS (Likes e Comentários)
@@ -83,10 +139,8 @@ router.post('/fy/:id/like', protect, async (req, res) => {
     const video_id = req.params.id;
     const user_id = req.user.id; 
 
-    // Simplificação: Assume que a inserção/remoção de like e a contagem são atômicas
     try {
-        // Lógica real envolveria uma tabela 'video_likes' para evitar duplicidade
-        // Aqui, apenas incrementamos para simulação:
+        // Simplificação: Apenas incrementa. (A lógica real usaria uma tabela de 'likes')
         await pool.execute('UPDATE fy_videos SET likes_count = likes_count + 1 WHERE id = ?', [video_id]);
         res.status(200).json({ success: true, message: 'Like adicionado.' });
     } catch (error) {
@@ -98,7 +152,7 @@ router.post('/fy/:id/like', protect, async (req, res) => {
 router.post('/fy/:id/comment', protect, async (req, res) => {
     const video_id = req.params.id;
     const user_id = req.user.id;
-    const { content, parent_comment_id } = req.body; // parent_comment_id para respostas
+    const { content, parent_comment_id } = req.body; 
 
     if (!content) {
         return res.status(400).json({ success: false, message: 'Conteúdo do comentário é obrigatório.' });
@@ -129,7 +183,7 @@ router.get('/fy/:id/comments', async (req, res) => {
             [video_id]
         );
         
-        // Estrutura os comentários em um formato hierárquico (respostas aninhadas)
+        // Estrutura os comentários em um formato hierárquido (respostas aninhadas)
         const commentsMap = {};
         const rootComments = [];
         
@@ -152,6 +206,5 @@ router.get('/fy/:id/comments', async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro interno ao ler comentários.' });
     }
 });
-
 
 module.exports = router;
