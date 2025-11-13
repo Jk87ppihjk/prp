@@ -1,16 +1,17 @@
-// ! Arquivo: authMiddleware.js
+// ! Arquivo: sellerAuthMiddleware.js (CORRIGIDO - LOG ROBUSTO)
 const jwt = require('jsonwebtoken');
 
-// ! Chave Secreta: DEVE SER A MESMA USADA NO login.js
+// --- Configurações de Ambiente ---
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// ! Importa o pool compartilhado
+const pool = require('./config/db'); // Importa o pool central
+
+
 /**
- * Middleware para verificar a validade do JSON Web Token (JWT)
- * e anexar os dados do usuário à requisição (req.user).
+ * Middleware para proteger rotas e garantir que APENAS LOJISTAS tenham acesso.
  */
-const protect = (req, res, next) => {
-    // 1. Verificar se o token está no cabeçalho
-    // O token geralmente vem no formato: Authorization: Bearer <token>
+const protectSeller = async (req, res, next) => {
     let token;
 
     if (
@@ -18,31 +19,52 @@ const protect = (req, res, next) => {
         req.headers.authorization.startsWith('Bearer')
     ) {
         try {
-            // 2. Extrair apenas o token (ignorar "Bearer ")
             token = req.headers.authorization.split(' ')[1];
-
-            // 3. Verificar o token
-            // jwt.verify() decodifica o token usando o JWT_SECRET
-            const decoded = jwt.verify(token, JWT_SECRET);
-
-            // 4. Anexar os dados do usuário à requisição
-            // Os dados decodificados (id, email, city) agora estão em req.user
-            req.user = decoded;
+            console.log(`[AUTH] Token recebido: ${token.substring(0, 10)}...`);
             
-            // 5. Chamar 'next()' para prosseguir para a próxima função (a rota principal)
+            // 1. Verificar e decodificar o token
+            const decoded = jwt.verify(token, JWT_SECRET);
+            console.log(`[AUTH] Token decodificado. ID: ${decoded.id}`);
+            
+            // 2. Buscar o perfil completo (incluindo o flag is_seller) no DB
+            const [rows] = await pool.execute(
+                'SELECT * FROM users WHERE id = ? LIMIT 1', 
+                [decoded.id]
+            );
+            const user = rows[0];
+
+            if (!user) {
+                console.log(`[AUTH] ERRO: Usuário ID ${decoded.id} não encontrado no DB.`);
+                return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
+            }
+
+            // 3. Verificar a permissão de lojista
+            if (!user.is_seller) {
+                console.log(`[AUTH] BLOQUEADO: Usuário ID ${user.id} não é um lojista (is_seller=FALSE).`);
+                return res.status(403).json({ success: false, message: 'Acesso negado. Apenas lojistas podem realizar esta ação.' });
+            }
+
+            // 4. Se for lojista (is_seller = TRUE), prossegue
+            console.log(`[AUTH] SUCESSO: Lojista ID ${user.id} autorizado.`);
+            // Passa os dados frescos do DB para req.user
+            req.user = user; 
+            
             next();
 
         } catch (error) {
-            console.error('Erro de Autenticação:', error.message);
-            // Se a verificação falhar (token inválido ou expirado)
-            res.status(401).json({ success: false, message: 'Não autorizado, token falhou.' });
+            // CORREÇÃO: Usa o erro completo se a mensagem estiver vazia
+            const errorMessage = error.message || 'Erro de Conexão DB ou JWT_SECRET Inválida.';
+            console.error(`[AUTH] FALHA GRAVE: ${errorMessage}. Verifique JWT_SECRET e conexão DB. Detalhe do Erro:`, error);
+            
+            res.status(401).json({ success: false, message: 'Não autorizado, token inválido ou erro de servidor.' });
         }
     }
 
-    // Se o cabeçalho Authorization não foi fornecido
+    // Se o token estiver ausente
     if (!token) {
-        res.status(401).json({ success: false, message: 'Não autorizado, nenhum token fornecido.' });
+        console.log('[AUTH] BLOQUEADO: Token não fornecido.');
+        res.status(401).json({ success: false, message: 'Não autorizado, token ausente.' });
     }
 };
 
-module.exports = { protect };
+module.exports = { protectSeller };
