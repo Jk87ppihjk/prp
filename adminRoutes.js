@@ -180,11 +180,8 @@ router.delete('/admin/districts/:id', protectAdmin, async (req, res) => {
     }
 });
 
-// ! Arquivo: adminRoutes.js (Novas Rotas para Categorias, Subcategorias e Atributos)
-// ... (código existente)
-
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DE CATEGORIAS (PROTEGIDAS)
+// ROTAS DE GESTÃO DE CATEGORIAS (CRUD) - PROTEGIDAS
 // -------------------------------------------------------------------
 
 // 1. CRIAR Categoria Principal (POST /api/admin/categories)
@@ -192,7 +189,7 @@ router.post('/admin/categories', protectAdmin, async (req, res) => {
     const { name } = req.body;
     try {
         const [result] = await pool.execute('INSERT INTO categories (name) VALUES (?)', [name]);
-        res.status(201).json({ success: true, message: 'Categoria criada.', id: result.insertId });
+        res.status(201).json({ success: true, message: 'Categoria principal criada.', id: result.insertId });
     } catch (error) {
         if (error.errno === 1062) { return res.status(409).json({ success: false, message: 'Categoria já existe.' }); }
         console.error('[ADMIN/CATEGORIES] Erro ao criar categoria:', error);
@@ -200,12 +197,10 @@ router.post('/admin/categories', protectAdmin, async (req, res) => {
     }
 });
 
-// 2. BUSCAR TODAS as Categorias e Subcategorias
+// 2. BUSCAR TODAS as Categorias Principais
 router.get('/admin/categories', protectAdmin, async (req, res) => {
     try {
-        // Busca Categorias, Subcategorias e Atributos (complexa, idealmente em múltiplas chamadas para o frontend)
         const [categories] = await pool.execute('SELECT * FROM categories ORDER BY name');
-        // Você precisará de lógica no frontend para juntar os dados ou criar rotas separadas
         res.status(200).json({ success: true, categories: categories });
     } catch (error) {
         console.error('[ADMIN/CATEGORIES] Erro ao buscar categorias:', error);
@@ -213,16 +208,35 @@ router.get('/admin/categories', protectAdmin, async (req, res) => {
     }
 });
 
-// 3. DELETAR Categoria Principal (e realocar lojas)
+// 3. ATUALIZAR Categoria Principal (PUT /api/admin/categories/:id)
+router.put('/admin/categories/:id', protectAdmin, async (req, res) => {
+    const categoryId = req.params.id;
+    const { name } = req.body;
+    try {
+        const [result] = await pool.execute('UPDATE categories SET name = ? WHERE id = ?', [name, categoryId]);
+        if (result.affectedRows === 0) { return res.status(404).json({ success: false, message: 'Categoria não encontrada.' }); }
+        res.status(200).json({ success: true, message: 'Categoria atualizada.' });
+    } catch (error) {
+        console.error('[ADMIN/CATEGORIES] Erro ao atualizar categoria:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+// 4. DELETAR Categoria Principal (DELETE /api/admin/categories/:id)
 router.delete('/admin/categories/:id', protectAdmin, async (req, res) => {
     const categoryId = req.params.id;
+    
+    // NOTA: O ID 1 é reservado para 'Categoria Geral' e não deve ser deletado.
+    if (parseInt(categoryId) === 1) {
+        return res.status(403).json({ success: false, message: 'A Categoria Geral não pode ser excluída.' });
+    }
+
     try {
         // 1. Realocar todas as lojas que usam esta categoria para NULL (ou Categoria Geral ID 1)
+        // Isso impede que as lojas fiquem sem categoria, forçando o lojista a escolher
         await pool.execute('UPDATE stores SET category_id = NULL WHERE category_id = ?', [categoryId]);
         
-        // 2. Deletar subcategorias e atributos relacionados (ON DELETE CASCADE no DB é ideal, mas faremos a exclusão explícita)
-        // Note: Se o atributo for 'category_id', você precisa criar uma 'category_general' com ID 1 primeiro.
-        
+        // 2. Deletar a categoria
         const [result] = await pool.execute('DELETE FROM categories WHERE id = ?', [categoryId]);
 
         if (result.affectedRows === 0) {
@@ -235,11 +249,106 @@ router.delete('/admin/categories/:id', protectAdmin, async (req, res) => {
     }
 });
 
+
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DE SUBCATEGORIAS E ATRIBUTOS
-// (Implementação semelhante de CRUD deve ser adicionada aqui, ligando 'category_id' e 'subcategory_id')
+// ROTAS DE GESTÃO DE SUBCATEGORIAS (CRUD) - PROTEGIDAS
 // -------------------------------------------------------------------
-// Ex: POST /api/admin/subcategories (requer category_id no body)
-// Ex: POST /api/admin/attributes (requer subcategory_id no body, com o campo 'type')
+
+// 5. CRIAR Subcategoria (POST /api/admin/subcategories)
+router.post('/admin/subcategories', protectAdmin, async (req, res) => {
+    const { name, category_id } = req.body;
+    try {
+        const [result] = await pool.execute('INSERT INTO subcategories (name, category_id) VALUES (?, ?)', [name, category_id]);
+        res.status(201).json({ success: true, message: 'Subcategoria criada.', id: result.insertId });
+    } catch (error) {
+        if (error.errno === 1062) { return res.status(409).json({ success: false, message: 'Subcategoria já existe nesta categoria.' }); }
+        console.error('[ADMIN/SUBCATEGORIES] Erro ao criar subcategoria:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+// 6. BUSCAR TODAS as Subcategorias (com nome da categoria)
+router.get('/admin/subcategories', protectAdmin, async (req, res) => {
+    try {
+        const [subcategories] = await pool.execute(
+            `SELECT s.*, c.name AS category_name
+             FROM subcategories s
+             JOIN categories c ON s.category_id = c.id
+             ORDER BY c.name, s.name`
+        );
+        res.status(200).json({ success: true, subcategories: subcategories });
+    } catch (error) {
+        console.error('[ADMIN/SUBCATEGORIES] Erro ao buscar subcategorias:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+// 7. DELETAR Subcategoria (DELETE /api/admin/subcategories/:id)
+router.delete('/admin/subcategories/:id', protectAdmin, async (req, res) => {
+    const subcategoryId = req.params.id;
+    try {
+        // Se a Subcategoria for deletada, os atributos ligados a ela serão deletados (via ON DELETE CASCADE no DB).
+        const [result] = await pool.execute('DELETE FROM subcategories WHERE id = ?', [subcategoryId]);
+
+        if (result.affectedRows === 0) { return res.status(404).json({ success: false, message: 'Subcategoria não encontrada.' }); }
+        res.status(200).json({ success: true, message: 'Subcategoria e atributos relacionados deletados.' });
+    } catch (error) {
+        console.error('[ADMIN/SUBCATEGORIES] Erro ao deletar subcategoria:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+
+// -------------------------------------------------------------------
+// ROTAS DE GESTÃO DE ATRIBUTOS (CRUD) - PROTEGIDAS
+// -------------------------------------------------------------------
+
+// 8. CRIAR Atributo (POST /api/admin/attributes)
+router.post('/admin/attributes', protectAdmin, async (req, res) => {
+    const { name, type, subcategory_id } = req.body; // type pode ser 'string', 'number', 'boolean', 'select'
+    
+    if (!name || !type || !subcategory_id) { return res.status(400).json({ success: false, message: 'Nome, tipo e subcategoria são obrigatórios.' }); }
+
+    try {
+        const [result] = await pool.execute('INSERT INTO attributes (name, type, subcategory_id) VALUES (?, ?, ?)', [name, type, subcategory_id]);
+        res.status(201).json({ success: true, message: 'Atributo criado.', id: result.insertId });
+    } catch (error) {
+        if (error.errno === 1062) { return res.status(409).json({ success: false, message: 'Atributo já existe nesta subcategoria.' }); }
+        console.error('[ADMIN/ATTRIBUTES] Erro ao criar atributo:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+// 9. BUSCAR TODOS os Atributos (com nome da subcategoria e categoria)
+router.get('/admin/attributes', protectAdmin, async (req, res) => {
+    try {
+        const [attributes] = await pool.execute(
+            `SELECT a.*, s.name AS subcategory_name, c.name AS category_name
+             FROM attributes a
+             JOIN subcategories s ON a.subcategory_id = s.id
+             JOIN categories c ON s.category_id = c.id
+             ORDER BY c.name, s.name, a.name`
+        );
+        res.status(200).json({ success: true, attributes: attributes });
+    } catch (error) {
+        console.error('[ADMIN/ATTRIBUTES] Erro ao buscar atributos:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+// 10. DELETAR Atributo (DELETE /api/admin/attributes/:id)
+router.delete('/admin/attributes/:id', protectAdmin, async (req, res) => {
+    const attributeId = req.params.id;
+    try {
+        const [result] = await pool.execute('DELETE FROM attributes WHERE id = ?', [attributeId]);
+
+        if (result.affectedRows === 0) { return res.status(404).json({ success: false, message: 'Atributo não encontrado.' }); }
+        res.status(200).json({ success: true, message: 'Atributo deletado.' });
+    } catch (error) {
+        console.error('[ADMIN/ATTRIBUTES] Erro ao deletar atributo:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
 
 module.exports = router;
