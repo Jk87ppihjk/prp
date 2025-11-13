@@ -59,6 +59,24 @@ router.get('/subcategories/:categoryId', async (req, res) => {
     }
 });
 
+// ! adminRoutes.js (ADICIONAR ROTA PÚBLICA DE ATRIBUTOS)
+
+// ROTA PÚBLICA 4: LISTAR ATRIBUTOS POR SUBCATEGORIA ID
+router.get('/attributes/:subcategoryId', async (req, res) => {
+    const subcategoryId = req.params.subcategoryId;
+    try {
+        // Busca ID, Nome e TIPO do atributo, essencial para o frontend renderizar o input correto
+        const [attributes] = await pool.execute(
+            'SELECT id, name, type FROM attributes WHERE subcategory_id = ? ORDER BY name', 
+            [subcategoryId]
+        );
+        res.status(200).json({ success: true, attributes: attributes });
+    } catch (error) {
+        console.error('[PUBLIC/ATTRIBUTES] Erro ao buscar atributos:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao listar atributos.' });
+    }
+});
+
 
 // -------------------------------------------------------------------
 // ROTAS DE GESTÃO DE CIDADES (CRUD) - PROTEGIDAS POR ADMIN
