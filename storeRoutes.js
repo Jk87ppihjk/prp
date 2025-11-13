@@ -1,19 +1,11 @@
-// ! Arquivo: storeRoutes.js (CORRIGIDO - ORDEM DAS ROTAS E CATEGORIAS)
+// ! Arquivo: storeRoutes.js (CORRIGIDO - SINTAXE E IMPORT DB)
 const express = require('express');
 const router = express.Router();
-const mysql = require('mysql2/promise');
-const { protectSeller } = require require('./sellerAuthMiddleware'); // Proteção de Lojista
+// const mysql = require('mysql2/promise'); // <-- REMOVIDO
+const { protectSeller } = require('./sellerAuthMiddleware'); // PROTEÇÃO DE LOJISTA (CORRIGIDO)
 
-// ! Configuração do Banco de Dados
-const dbConfig = { 
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    connectionLimit: 10,
-}; 
-const pool = mysql.createPool(dbConfig);
-
+// ! Importa o pool compartilhado
+const pool = require('./config/db'); // <-- CORREÇÃO: Usa o pool central
 
 // -------------------------------------------------------------------
 // ROTAS PRIVADAS (para painel.html)
@@ -21,7 +13,7 @@ const pool = mysql.createPool(dbConfig);
 
 /**
  * 1. Rota para BUSCAR a loja do lojista logado (GET /api/stores/mine)
- * ATENÇÃO: ESTA ROTA DEVE VIR ANTES DA ROTA /stores/:id
+ * ESTA ROTA DEVE VIR PRIMEIRO.
  */
 router.get('/stores/mine', protectSeller, async (req, res) => {
     const seller_id = req.user.id;
@@ -57,8 +49,7 @@ router.get('/stores/mine', protectSeller, async (req, res) => {
 // ROTA PÚBLICA (para store_profile.html)
 // -------------------------------------------------------------------
 /**
- * Rota para BUSCAR um perfil de loja pública e seus produtos (GET /api/stores/:id)
- * Esta rota só será chamada se a rota /stores/mine NÃO for correspondida.
+ * 2. Rota para BUSCAR um perfil de loja pública e seus produtos (GET /api/stores/:id)
  */
 router.get('/stores/:id', async (req, res) => {
     const storeId = req.params.id;
@@ -101,12 +92,11 @@ router.get('/stores/:id', async (req, res) => {
 
 
 /**
- * 2. Rota para CRIAR uma nova loja (POST /api/stores)
+ * 3. Rota para CRIAR uma nova loja (POST /api/stores)
  * USADO PELO store_setup.html
  */
 router.post('/stores', protectSeller, async (req, res) => {
     const seller_id = req.user.id;
-    // CATEGORY_ID ADICIONADO AQUI
     const { name, bio, address_line1, logo_url, banner_url, category_id } = req.body;
     console.log(`[STORES/POST] INÍCIO da criação de loja para Seller ID: ${seller_id}`);
 
@@ -116,7 +106,7 @@ router.post('/stores', protectSeller, async (req, res) => {
     }
 
     try {
-        // Checagem de existência (o que gera o 409)
+        // Checagem de existência
         const checkQuery = 'SELECT id FROM stores WHERE seller_id = ?';
         const [existing] = await pool.execute(checkQuery, [seller_id]);
         
@@ -148,13 +138,12 @@ router.post('/stores', protectSeller, async (req, res) => {
 });
 
 /**
- * 3. Rota para ATUALIZAR uma loja existente (PUT /api/stores/:id)
+ * 4. Rota para ATUALIZAR uma loja existente (PUT /api/stores/:id)
  * USADO PELO painel.html para salvar
  */
 router.put('/stores/:id', protectSeller, async (req, res) => {
     const seller_id = req.user.id;
     const storeId = req.params.id;
-    // CATEGORY_ID ADICIONADO AQUI
     const { name, bio, address_line1, logo_url, banner_url, category_id } = req.body;
     console.log(`[STORES/PUT] INÍCIO da atualização da Loja ID ${storeId} para Seller ID: ${seller_id}`);
 
