@@ -1,4 +1,4 @@
-// ! Arquivo: adminRoutes.js (CRUD COMPLETO E FINALIZADO)
+// ! Arquivo: adminRoutes.js (COM ROTA PÚBLICA DE BAIRROS)
 const express = require('express');
 const router = express.Router();
 const mysql = require('mysql2/promise');
@@ -31,7 +31,7 @@ router.get('/cities', async (req, res) => {
     }
 });
 
-// ROTA PÚBLICA 2: LISTAR CATEGORIAS (CORREÇÃO PARA O PAINEL DO LOJISTA)
+// ROTA PÚBLICA 2: LISTAR CATEGORIAS
 router.get('/categories', async (req, res) => {
     try {
         const [categories] = await pool.execute('SELECT id, name FROM categories ORDER BY name');
@@ -41,8 +41,6 @@ router.get('/categories', async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro interno ao listar categorias.' });
     }
 });
-
-// ! adminRoutes.js (ADICIONAR ROTA PÚBLICA DE SUBCATEGORIAS)
 
 // ROTA PÚBLICA 3: LISTAR SUBCATEGORIAS POR CATEGORIA ID
 router.get('/subcategories/:categoryId', async (req, res) => {
@@ -59,13 +57,10 @@ router.get('/subcategories/:categoryId', async (req, res) => {
     }
 });
 
-// ! adminRoutes.js (ADICIONAR ROTA PÚBLICA DE ATRIBUTOS)
-
 // ROTA PÚBLICA 4: LISTAR ATRIBUTOS POR SUBCATEGORIA ID
 router.get('/attributes/:subcategoryId', async (req, res) => {
     const subcategoryId = req.params.subcategoryId;
     try {
-        // Busca ID, Nome e TIPO do atributo, essencial para o frontend renderizar o input correto
         const [attributes] = await pool.execute(
             'SELECT id, name, type FROM attributes WHERE subcategory_id = ? ORDER BY name', 
             [subcategoryId]
@@ -77,6 +72,20 @@ router.get('/attributes/:subcategoryId', async (req, res) => {
     }
 });
 
+// ROTA PÚBLICA 5: LISTAR BAIRROS POR ID DA CIDADE (CORREÇÃO DO 404)
+router.get('/districts/city/:cityId', async (req, res) => {
+    const cityId = req.params.cityId;
+    try {
+        const [districts] = await pool.execute(
+            'SELECT id, name FROM districts WHERE city_id = ? ORDER BY name', 
+            [cityId]
+        );
+        res.status(200).json({ success: true, districts: districts });
+    } catch (error) {
+        console.error('[PUBLIC/DISTRICTS] Erro ao buscar bairros:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao listar bairros.' });
+    }
+});
 
 // -------------------------------------------------------------------
 // ROTAS DE GESTÃO DE CIDADES (CRUD) - PROTEGIDAS POR ADMIN
@@ -426,6 +435,5 @@ router.put('/admin/attributes/:id', protectAdmin, async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro interno.' });
     }
 });
-
 
 module.exports = router;
