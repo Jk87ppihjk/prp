@@ -1,26 +1,57 @@
-// ! Arquivo: storeRoutes.js (CORRIGIDO)
+// ! Arquivo: storeRoutes.js (CORRIGIDO - ORDEM DAS ROTAS AJUSTADA)
 const express = require('express');
 const router = express.Router();
-// const mysql = require('mysql2/promise'); // <-- Removido
 const { protectSeller } = require('./sellerAuthMiddleware'); // Proteção de Lojista
+const pool = require('./config/db'); // Importa o pool compartilhado
 
-// ! Importa o pool compartilhado
-const pool = require('./config/db'); // <-- CORREÇÃO: Importa o pool central
+// -------------------------------------------------------------------
+// ROTAS PRIVADAS (para painel.html)
+// -------------------------------------------------------------------
 
-/*
-// ! Configuração do Banco de Dados (REMOVIDA)
-const dbConfig = { ... }; 
-const pool = mysql.createPool(dbConfig);
-*/
+/**
+ * 1. Rota para BUSCAR a loja do lojista logado (GET /api/stores/mine)
+ * USADO PELO painel.html
+ * ! IMPORTANTE: Esta rota DEVE vir ANTES de '/stores/:id' para funcionar.
+ */
+router.get('/stores/mine', protectSeller, async (req, res) => {
+    const seller_id = req.user.id;
+    console.log(`[STORES/MINE] INÍCIO da busca para Seller ID: ${seller_id}`);
+    
+    try {
+        const query = 'SELECT * FROM stores WHERE seller_id = ? LIMIT 1';
+        console.log(`[STORES/MINE] Executando consulta: ${query} com [${seller_id}]`);
+        
+        const [rows] = await pool.execute(query, [seller_id]);
+        
+        // ! LOG CRÍTICO
+        console.log(`[STORES/MINE] Resultado da consulta: ${rows.length} linha(s) encontrada(s).`);
+
+        if (rows.length === 0) {
+            console.warn(`[STORES/MINE] FIM: Loja não encontrada para seller_id ${seller_id}, retornando 404.`);
+            // Mensagem de erro específica para esta rota
+            return res.status(404).json({ success: false, message: 'Nenhuma loja encontrada para este lojista.' });
+        }
+        
+        console.log(`[STORES/MINE] FIM: Loja ID ${rows[0].id} encontrada, retornando 200.`);
+        res.status(200).json({ success: true, store: rows[0] });
+
+    } catch (error) {
+        console.error('[STORES/MINE] ERRO FATAL ao buscar loja:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao buscar dados da loja.' });
+    }
+});
+
 
 // -------------------------------------------------------------------
 // ROTA PÚBLICA (para store_profile.html)
 // -------------------------------------------------------------------
 /**
  * Rota para BUSCAR um perfil de loja pública e seus produtos (GET /api/stores/:id)
+ * ! IMPORTANTE: Esta rota deve vir DEPOIS de '/stores/mine'.
  */
 router.get('/stores/:id', async (req, res) => {
     const storeId = req.params.id;
+    console.log(`[STORES/:ID] Buscando perfil público da Loja ID: ${storeId}`);
 
     try {
         // 1. Buscar os dados da Loja
@@ -30,6 +61,7 @@ router.get('/stores/:id', async (req, res) => {
         );
 
         if (storeRows.length === 0) {
+            console.warn(`[STORES/:ID] Loja ID ${storeId} não encontrada, retornando 404.`);
             return res.status(404).json({ success: false, message: 'Loja não encontrada.' });
         }
         
@@ -49,46 +81,15 @@ router.get('/stores/:id', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('[STORES] Erro ao buscar perfil público da loja:', error);
+        console.error('[STORES/:ID] Erro ao buscar perfil público da loja:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao buscar dados da loja.' });
     }
 });
 
 
 // -------------------------------------------------------------------
-// ROTAS PRIVADAS (para painel.html)
+// ROTAS PRIVADAS (Continuação)
 // -------------------------------------------------------------------
-
-/**
- * 1. Rota para BUSCAR a loja do lojista logado (GET /api/stores/mine)
- * USADO PELO painel.html
- */
-router.get('/stores/mine', protectSeller, async (req, res) => {
-    const seller_id = req.user.id;
-    console.log(`[STORES/MINE] INÍCIO da busca para Seller ID: ${seller_id}`);
-    
-    try {
-        const query = 'SELECT * FROM stores WHERE seller_id = ? LIMIT 1';
-        console.log(`[STORES/MINE] Executando consulta: ${query} com [${seller_id}]`);
-        
-        const [rows] = await pool.execute(query, [seller_id]);
-        
-        // ! LOG CRÍTICO QUE MOSTRARÁ A INCONSISTÊNCIA
-        console.log(`[STORES/MINE] Resultado da consulta: ${rows.length} linha(s) encontrada(s).`);
-
-        if (rows.length === 0) {
-            console.warn(`[STORES/MINE] FIM: Loja não encontrada, retornando 404.`);
-            return res.status(404).json({ success: false, message: 'Nenhuma loja encontrada para este lojista.' });
-        }
-        
-        console.log(`[STORES/MINE] FIM: Loja ID ${rows[0].id} encontrada, retornando 200.`);
-        res.status(200).json({ success: true, store: rows[0] });
-
-    } catch (error) {
-        console.error('[STORES/MINE] ERRO FATAL ao buscar loja:', error);
-        res.status(500).json({ success: false, message: 'Erro interno ao buscar dados da loja.' });
-    }
-});
 
 /**
  * 2. Rota para CRIAR uma nova loja (POST /api/stores)
@@ -110,7 +111,6 @@ router.post('/stores', protectSeller, async (req, res) => {
         console.log(`[STORES/POST] Verificando loja existente para o Seller ID ${seller_id}...`);
         const [existing] = await pool.execute(checkQuery, [seller_id]);
         
-        // ! LOG CRÍTICO QUE MOSTRARÁ A EXISTÊNCIA DO REGISTRO
         console.log(`[STORES/POST] Resultado da verificação: ${existing.length} loja(s) encontrada(s).`);
         
         if (existing.length > 0) {
