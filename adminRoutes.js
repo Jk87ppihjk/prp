@@ -1,22 +1,24 @@
-// ! Arquivo: adminRoutes.js (CORRIGIDO)
+// ! Arquivo: adminRoutes.js (CRUD COMPLETO E CORRIGIDO)
 const express = require('express');
 const router = express.Router();
-// const mysql = require('mysql2/promise'); // <-- Removido
+const mysql = require('mysql2/promise');
 const { protectAdmin } = require('./adminAuthMiddleware'); 
 
-// ! Importa o pool compartilhado
-const pool = require('./config/db'); // <-- CORREÇÃO: Importa o pool central
-
-/*
-// ! Configuração do Banco de Dados (REMOVIDA)
-const dbConfig = { ... }; 
+// ! Configuração do Banco de Dados
+const dbConfig = { 
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    connectionLimit: 10,
+}; 
 const pool = mysql.createPool(dbConfig);
-*/
 
 // -------------------------------------------------------------------
-// ROTA PÚBLICA PARA LISTAR CIDADES (Usada no Login/Cadastro)
+// ROTAS PÚBLICAS (Acessíveis por qualquer cliente/lojista)
 // -------------------------------------------------------------------
-// Esta rota é PÚBLICA e responde em GET /api/cities
+
+// ROTA PÚBLICA 1: LISTAR CIDADES (Usada no Login/Cadastro)
 router.get('/cities', async (req, res) => {
     try {
         // Seleciona apenas cidades ativas para o frontend
@@ -30,13 +32,24 @@ router.get('/cities', async (req, res) => {
     }
 });
 
+// ROTA PÚBLICA 2: LISTAR CATEGORIAS (NOVA ROTA PARA O PAINEL DO LOJISTA)
+router.get('/categories', async (req, res) => {
+    try {
+        // Seleciona apenas o essencial: ID e Nome
+        const [categories] = await pool.execute('SELECT id, name FROM categories ORDER BY name');
+        res.status(200).json({ success: true, categories: categories });
+    } catch (error) {
+        console.error('[PUBLIC/CATEGORIES] Erro ao buscar categorias:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao listar categorias.' });
+    }
+});
+
 
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DE CIDADES (CRUD) - PROTEGIDAS
+// ROTAS DE GESTÃO DE CIDADES (CRUD) - PROTEGIDAS POR ADMIN
 // -------------------------------------------------------------------
 
-// CREATE (Criação existente)
-// Responde em POST /api/admin/cities
+// CREATE
 router.post('/admin/cities', protectAdmin, async (req, res) => {
     const { name, state_province } = req.body;
     try {
@@ -54,23 +67,21 @@ router.post('/admin/cities', protectAdmin, async (req, res) => {
     }
 });
 
-// READ (Listar todas as cidades para o painel de gestão)
-// Responde em GET /api/admin/cities
+// READ
 router.get('/admin/cities', protectAdmin, async (req, res) => {
     try {
         const [cities] = await pool.execute('SELECT * FROM cities ORDER BY name');
         res.status(200).json({ success: true, data: cities });
-    } catch (error) { // <-- CORREÇÃO: "T_" removido daqui
+    } catch (error) { 
         console.error('Erro ao listar cidades:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao listar cidades.' });
     }
 });
 
-// UPDATE (Editar cidade)
-// Responde em PUT /api/admin/cities/:id
+// UPDATE
 router.put('/admin/cities/:id', protectAdmin, async (req, res) => {
     const cityId = req.params.id;
-    const { name, state_province, is_active } = req.body; // is_active é opcional
+    const { name, state_province, is_active } = req.body; 
     try {
         const [result] = await pool.execute(
             'UPDATE cities SET name = ?, state_province = ?, is_active = COALESCE(?, is_active) WHERE id = ?',
@@ -86,8 +97,7 @@ router.put('/admin/cities/:id', protectAdmin, async (req, res) => {
     }
 });
 
-// DELETE (Excluir cidade)
-// Responde em DELETE /api/admin/cities/:id
+// DELETE
 router.delete('/admin/cities/:id', protectAdmin, async (req, res) => {
     const cityId = req.params.id;
     try {
@@ -98,7 +108,6 @@ router.delete('/admin/cities/:id', protectAdmin, async (req, res) => {
         }
         res.status(200).json({ success: true, message: 'Cidade excluída com sucesso.' });
     } catch (error) {
-        // Erro 1451: Restrição de chave estrangeira (ainda há bairros ou usuários linkados)
         if (error.errno === 1451) {
              return res.status(409).json({ success: false, message: 'Não é possível excluir: existem Bairros ou Usuários vinculados a esta cidade.' });
         }
@@ -108,10 +117,10 @@ router.delete('/admin/cities/:id', protectAdmin, async (req, res) => {
 });
 
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DE BAIRROS (CRUD) - PROTEGIDAS
+// ROTAS DE GESTÃO DE BAIRROS (CRUD) - PROTEGIDAS POR ADMIN
 // -------------------------------------------------------------------
 
-// CREATE (Criação existente)
+// CREATE
 router.post('/admin/districts', protectAdmin, async (req, res) => {
     const { city_id, name } = req.body;
     try {
@@ -129,7 +138,7 @@ router.post('/admin/districts', protectAdmin, async (req, res) => {
     }
 });
 
-// READ (Listar todos os bairros para o painel de gestão - com nome da cidade)
+// READ
 router.get('/admin/districts', protectAdmin, async (req, res) => {
     try {
         const [districts] = await pool.execute(
@@ -145,7 +154,7 @@ router.get('/admin/districts', protectAdmin, async (req, res) => {
     }
 });
 
-// UPDATE (Editar bairro)
+// UPDATE
 router.put('/admin/districts/:id', protectAdmin, async (req, res) => {
     const districtId = req.params.id;
     const { name, city_id } = req.body;
@@ -164,7 +173,7 @@ router.put('/admin/districts/:id', protectAdmin, async (req, res) => {
     }
 });
 
-// DELETE (Excluir bairro)
+// DELETE
 router.delete('/admin/districts/:id', protectAdmin, async (req, res) => {
     const districtId = req.params.id;
     try {
@@ -180,8 +189,9 @@ router.delete('/admin/districts/:id', protectAdmin, async (req, res) => {
     }
 });
 
+
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DE CATEGORIAS (CRUD) - PROTEGIDAS
+// ROTAS DE GESTÃO DE CATEGORIAS (CRUD) - PROTEGIDAS POR ADMIN
 // -------------------------------------------------------------------
 
 // 1. CRIAR Categoria Principal (POST /api/admin/categories)
@@ -197,7 +207,7 @@ router.post('/admin/categories', protectAdmin, async (req, res) => {
     }
 });
 
-// 2. BUSCAR TODAS as Categorias Principais
+// 2. BUSCAR TODAS as Categorias Principais (USO EXCLUSIVO DO ADMIN)
 router.get('/admin/categories', protectAdmin, async (req, res) => {
     try {
         const [categories] = await pool.execute('SELECT * FROM categories ORDER BY name');
@@ -232,11 +242,10 @@ router.delete('/admin/categories/:id', protectAdmin, async (req, res) => {
     }
 
     try {
-        // 1. Realocar todas as lojas que usam esta categoria para NULL (ou Categoria Geral ID 1)
-        // Isso impede que as lojas fiquem sem categoria, forçando o lojista a escolher
+        // 1. Realocar todas as lojas que usam esta categoria para NULL (Fallback)
         await pool.execute('UPDATE stores SET category_id = NULL WHERE category_id = ?', [categoryId]);
         
-        // 2. Deletar a categoria
+        // 2. Deletar a categoria (Subcategorias e Atributos são excluídos via ON DELETE CASCADE no SQL)
         const [result] = await pool.execute('DELETE FROM categories WHERE id = ?', [categoryId]);
 
         if (result.affectedRows === 0) {
@@ -251,7 +260,7 @@ router.delete('/admin/categories/:id', protectAdmin, async (req, res) => {
 
 
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DE SUBCATEGORIAS (CRUD) - PROTEGIDAS
+// ROTAS DE GESTÃO DE SUBCATEGORIAS (CRUD) - PROTEGIDAS POR ADMIN
 // -------------------------------------------------------------------
 
 // 5. CRIAR Subcategoria (POST /api/admin/subcategories)
@@ -287,7 +296,6 @@ router.get('/admin/subcategories', protectAdmin, async (req, res) => {
 router.delete('/admin/subcategories/:id', protectAdmin, async (req, res) => {
     const subcategoryId = req.params.id;
     try {
-        // Se a Subcategoria for deletada, os atributos ligados a ela serão deletados (via ON DELETE CASCADE no DB).
         const [result] = await pool.execute('DELETE FROM subcategories WHERE id = ?', [subcategoryId]);
 
         if (result.affectedRows === 0) { return res.status(404).json({ success: false, message: 'Subcategoria não encontrada.' }); }
@@ -298,14 +306,32 @@ router.delete('/admin/subcategories/:id', protectAdmin, async (req, res) => {
     }
 });
 
+// 8. ATUALIZAR Subcategoria
+router.put('/admin/subcategories/:id', protectAdmin, async (req, res) => {
+    const subcategoryId = req.params.id;
+    const { name, category_id } = req.body;
+    try {
+        const [result] = await pool.execute(
+            'UPDATE subcategories SET name = ?, category_id = ? WHERE id = ?',
+            [name, category_id, subcategoryId]
+        );
+        if (result.affectedRows === 0) { return res.status(404).json({ success: false, message: 'Subcategoria não encontrada.' }); }
+        res.status(200).json({ success: true, message: 'Subcategoria atualizada.' });
+    } catch (error) {
+        if (error.errno === 1062) { return res.status(409).json({ success: false, message: 'Subcategoria já existe nesta categoria.' }); }
+        console.error('[ADMIN/SUBCATEGORIES] Erro ao atualizar subcategoria:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
 
 // -------------------------------------------------------------------
-// ROTAS DE GESTÃO DE ATRIBUTOS (CRUD) - PROTEGIDAS
+// ROTAS DE GESTÃO DE ATRIBUTOS (CRUD) - PROTEGIDAS POR ADMIN
 // -------------------------------------------------------------------
 
-// 8. CRIAR Atributo (POST /api/admin/attributes)
+// 9. CRIAR Atributo (POST /api/admin/attributes)
 router.post('/admin/attributes', protectAdmin, async (req, res) => {
-    const { name, type, subcategory_id } = req.body; // type pode ser 'string', 'number', 'boolean', 'select'
+    const { name, type, subcategory_id } = req.body; 
     
     if (!name || !type || !subcategory_id) { return res.status(400).json({ success: false, message: 'Nome, tipo e subcategoria são obrigatórios.' }); }
 
@@ -319,7 +345,7 @@ router.post('/admin/attributes', protectAdmin, async (req, res) => {
     }
 });
 
-// 9. BUSCAR TODOS os Atributos (com nome da subcategoria e categoria)
+// 10. BUSCAR TODOS os Atributos 
 router.get('/admin/attributes', protectAdmin, async (req, res) => {
     try {
         const [attributes] = await pool.execute(
@@ -336,7 +362,7 @@ router.get('/admin/attributes', protectAdmin, async (req, res) => {
     }
 });
 
-// 10. DELETAR Atributo (DELETE /api/admin/attributes/:id)
+// 11. DELETAR Atributo (DELETE /api/admin/attributes/:id)
 router.delete('/admin/attributes/:id', protectAdmin, async (req, res) => {
     const attributeId = req.params.id;
     try {
@@ -346,6 +372,24 @@ router.delete('/admin/attributes/:id', protectAdmin, async (req, res) => {
         res.status(200).json({ success: true, message: 'Atributo deletado.' });
     } catch (error) {
         console.error('[ADMIN/ATTRIBUTES] Erro ao deletar atributo:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+// 12. ATUALIZAR Atributo
+router.put('/admin/attributes/:id', protectAdmin, async (req, res) => {
+    const attributeId = req.params.id;
+    const { name, type, subcategory_id } = req.body;
+    try {
+        const [result] = await pool.execute(
+            'UPDATE attributes SET name = ?, type = ?, subcategory_id = ? WHERE id = ?',
+            [name, type, subcategory_id, attributeId]
+        );
+        if (result.affectedRows === 0) { return res.status(404).json({ success: false, message: 'Atributo não encontrado.' }); }
+        res.status(200).json({ success: true, message: 'Atributo atualizado.' });
+    } catch (error) {
+        if (error.errno === 1062) { return res.status(409).json({ success: false, message: 'Atributo já existe nesta subcategoria.' }); }
+        console.error('[ADMIN/ATTRIBUTES] Erro ao atualizar atributo:', error);
         res.status(500).json({ success: false, message: 'Erro interno.' });
     }
 });
