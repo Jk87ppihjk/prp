@@ -32,7 +32,7 @@ router.post('/register', async (req, res) => {
     // is_admin é FALSE por segurança no registro via frontend
     const { email, password, city, full_name, is_seller } = req.body; 
     
-    // A cidade ainda é obrigatória no REGISTRO (para ter um valor no DB)
+    // A cidade AINDA É obrigatória no REGISTRO (para ter um valor no DB)
     if (!email || !password || !city) {
         return res.status(400).json({ success: false, message: 'Os campos email, senha e cidade são obrigatórios.' });
     }
@@ -73,8 +73,9 @@ router.post('/login', async (req, res) => {
     const { email, password, city } = req.body; 
 
     // Mantenho a checagem básica para evitar erros do lado do cliente
-    if (!email || !password || !city) {
-        return res.status(400).json({ success: false, message: 'Os campos email, senha e cidade são obrigatórios.' });
+    // CORREÇÃO: A cidade FOI REMOVIDA da validação de obrigatoriedade.
+    if (!email || !password) {
+        return res.status(400).json({ success: false, message: 'Os campos email e senha são obrigatórios.' });
     }
 
     try {
