@@ -46,26 +46,61 @@ router.post('/products', protectSeller, async (req, res) => {
 });
 
 
-// 2. Rota para LER a lista de produtos (PÚBLICA - PARA index.html)
+// ! Arquivo: productRoutes.js
+
+// -------------------------------------------------------------------
+// Rotas de Produtos
+// -------------------------------------------------------------------
+
+// ... (Rota 1: POST /products - CRIAR PRODUTO)
+
+// 2. Rota para LER a lista de produtos (PÚBLICA - COM FILTROS)
 router.get('/products', async (req, res) => {
-    try {
+    const categoryId = req.query.category_id;
+    const subcategoryId = req.query.subcategory_id;
+    
+    // Cláusula base para garantir que apenas produtos ativos sejam exibidos
+    let whereClause = 'WHERE p.is_active = TRUE';
+    const queryParams = [];
+
+    // Adiciona filtro por Categoria Principal
+    if (categoryId) {
+        // Filtra produtos cuja loja esteja associada à categoria selecionada.
+        // O JOIN com 'stores' (s) já está presente na query.
+        whereClause += ' AND s.category_id = ?';
+        queryParams.push(categoryId);
+    }
+    
+    // Adiciona filtro por Subcategoria
+    if (subcategoryId) {
+        // NOTA: Assumimos que a tabela 'products' terá, no futuro, a coluna 'subcategory_id'.
+        // Se a sua tabela 'products' já tem esta coluna, este filtro funciona:
+        whereClause += ' AND p.subcategory_id = ?';
+        queryParams.push(subcategoryId);
         
-        // Esta rota é a que alimenta o index.html e filtra APENAS produtos ATIVOS
-        const [products] = await pool.execute(
-            `SELECT p.*, s.id AS store_id, s.name AS store_name, u.full_name AS seller_name, u.city 
-             FROM products p
-             JOIN stores s ON p.seller_id = s.seller_id
-             JOIN users u ON p.seller_id = u.id
-             WHERE p.is_active = TRUE`
-        );
+        // Se a sua tabela AINDA NÃO tem p.subcategory_id, mantenha as linhas acima COMENTADAS
+        // e adicione p.subcategory_id à sua tabela products.
+    }
+
+    try {
+        const query = `
+            SELECT p.*, s.id AS store_id, s.name AS store_name, u.full_name AS seller_name, u.city 
+            FROM products p
+            JOIN stores s ON p.seller_id = s.seller_id
+            JOIN users u ON p.seller_id = u.id
+            ${whereClause}
+        `;
+        
+        const [products] = await pool.execute(query, queryParams);
         
         res.status(200).json({ success: true, count: products.length, products });
 
     } catch (error) {
-        console.error('[PRODUCTS] ERRO ao buscar produtos públicos:', error);
+        console.error('[PRODUCTS] ERRO ao buscar produtos públicos com filtros:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao carregar produtos.' });
     }
 });
+
 
 
 // 3. Rota para BUSCAR PRODUTO POR ID (PÚBLICA - PARA product_page.html)
