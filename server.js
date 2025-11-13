@@ -1,4 +1,4 @@
-// ! Arquivo: server.js (CORRIGIDO PARA MYSQL)
+// ! Arquivo: server.js (CORRIGIDO PARA MYSQL E DELIVERY ROUTES)
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config(); // Carrega as variáveis de ambiente (DB_HOST, JWT_SECRET, etc)
@@ -17,6 +17,7 @@ const productRoutes = require('./productRoutes');
 const storeRoutes = require('./storeRoutes');
 const fyRoutes = require('./fyRoutes');
 const uploadRoutes = require('./uploadRoutes');
+const deliveryRoutes = require('./deliveryRoutes'); // NOVO: Rotas de Entrega e Pedidos
 
 // --- Uso das Rotas ---
 // O prefixo /api é adicionado aqui para corresponder ao login.js e adminRoutes.js
@@ -25,7 +26,8 @@ app.use('/api', adminRoutes);
 app.use('/api', productRoutes);
 app.use('/api', storeRoutes);
 app.use('/api', fyRoutes);
-app.use('/api', uploadRoutes); // Suas rotas de upload já incluem /upload no nome
+app.use('/api', uploadRoutes); 
+app.use('/api', deliveryRoutes); // NOVO: Rota de Pedidos/Entregas
 
 // Rota "raiz" para verificar se o servidor está online
 app.get('/', (req, res) => {
