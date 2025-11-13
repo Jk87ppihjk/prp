@@ -1,9 +1,14 @@
-// ! Arquivo: productRoutes.js (CORRIGIDO PARA O PAINEL)
+// ! Arquivo: productRoutes.js (COM REGRAS DE PREÇO E SUBCATEGORIA)
 const express = require('express');
 const router = express.Router();
 const { protectSeller } = require('./sellerAuthMiddleware'); 
 const { protect } = require('./authMiddleware'); 
 const pool = require('./config/db'); // Importa o pool compartilhado
+
+// --- Constantes de Preço ---
+const MARKETPLACE_FEE = 5.00; // Taxa do Marketplace (5%)
+const DELIVERY_FEE = 5.00;     // Taxa de Entrega
+const TOTAL_ADDITION = MARKETPLACE_FEE + DELIVERY_FEE; // R$ 10.00
 
 // -------------------------------------------------------------------
 // Rotas de Produtos
@@ -20,22 +25,30 @@ router.post('/products', protectSeller, async (req, res) => {
             return res.status(403).json({ success: false, message: 'A criação de produtos requer que sua loja esteja cadastrada primeiro.' });
         }
         
-        const { name, description, price, stock_quantity, category, image_url } = req.body;
+        // Inclui subcategory_id no desestruturação
+        const { name, description, price, stock_quantity, category, subcategory_id, image_url } = req.body;
 
         if (!name || !price) {
             return res.status(400).json({ success: false, message: 'Nome e Preço são obrigatórios.' });
         }
+        
+        // ***** LÓGICA DE PREÇO CORRIGIDA *****
+        const basePrice = parseFloat(price);
+        // Adiciona R$ 10.00 (5 Marketplace + 5 Entrega) ao preço antes de salvar
+        const finalPrice = basePrice + TOTAL_ADDITION; 
+        console.log(`[PRODUCTS/POST] Preço Base: R$${basePrice.toFixed(2)}. Preço Final no DB: R$${finalPrice.toFixed(2)}`);
+        // ************************************
 
         const [result] = await pool.execute(
             `INSERT INTO products 
-            (seller_id, name, description, price, stock_quantity, category, image_url) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [seller_id, name, description, price, stock_quantity, category, image_url]
+            (seller_id, name, description, price, stock_quantity, category, subcategory_id, image_url) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [seller_id, name, description, finalPrice, stock_quantity, category, subcategory_id || null, image_url]
         );
         
         res.status(201).json({ 
             success: true, 
-            message: 'Produto criado com sucesso pelo lojista.', 
+            message: 'Produto criado com sucesso. O preço final inclui R$10.00 de taxa.', 
             product_id: result.insertId 
         });
 
@@ -46,40 +59,24 @@ router.post('/products', protectSeller, async (req, res) => {
 });
 
 
-// ! Arquivo: productRoutes.js
-
-// -------------------------------------------------------------------
-// Rotas de Produtos
-// -------------------------------------------------------------------
-
-// ... (Rota 1: POST /products - CRIAR PRODUTO)
-
-// 2. Rota para LER a lista de produtos (PÚBLICA - COM FILTROS)
+// 2. Rota para LER a lista de produtos (PÚBLICA - PARA index.html)
 router.get('/products', async (req, res) => {
     const categoryId = req.query.category_id;
     const subcategoryId = req.query.subcategory_id;
     
-    // Cláusula base para garantir que apenas produtos ativos sejam exibidos
     let whereClause = 'WHERE p.is_active = TRUE';
     const queryParams = [];
 
-    // Adiciona filtro por Categoria Principal
+    // Filtro por Categoria Principal (Loja)
     if (categoryId) {
-        // Filtra produtos cuja loja esteja associada à categoria selecionada.
-        // O JOIN com 'stores' (s) já está presente na query.
         whereClause += ' AND s.category_id = ?';
         queryParams.push(categoryId);
     }
     
-    // Adiciona filtro por Subcategoria
+    // Filtro por Subcategoria (Produto)
     if (subcategoryId) {
-        // NOTA: Assumimos que a tabela 'products' terá, no futuro, a coluna 'subcategory_id'.
-        // Se a sua tabela 'products' já tem esta coluna, este filtro funciona:
         whereClause += ' AND p.subcategory_id = ?';
         queryParams.push(subcategoryId);
-        
-        // Se a sua tabela AINDA NÃO tem p.subcategory_id, mantenha as linhas acima COMENTADAS
-        // e adicione p.subcategory_id à sua tabela products.
     }
 
     try {
@@ -100,7 +97,6 @@ router.get('/products', async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro interno ao carregar produtos.' });
     }
 });
-
 
 
 // 3. Rota para BUSCAR PRODUTO POR ID (PÚBLICA - PARA product_page.html)
@@ -136,13 +132,11 @@ router.get('/products/:id', async (req, res) => {
 router.get('/products/store/:sellerId', protectSeller, async (req, res) => {
     const seller_id = req.params.sellerId;
 
-    // A validação de segurança garante que o lojista SÓ PODE ver os SEUS produtos
     if (req.user.id.toString() !== seller_id) {
          return res.status(403).json({ success: false, message: 'Acesso negado. Você não tem permissão para ver estes produtos.' });
     }
     
     try {
-        // CORREÇÃO: Busca TODOS os produtos (ativos e inativos) do lojista
         const [products] = await pool.execute(
             'SELECT * FROM products WHERE seller_id = ? ORDER BY created_at DESC',
             [seller_id]
@@ -160,14 +154,18 @@ router.get('/products/store/:sellerId', protectSeller, async (req, res) => {
 router.put('/products/:id', protectSeller, async (req, res) => {
     const productId = req.params.id;
     const seller_id = req.user.id; 
-    const { name, description, price, stock_quantity, category, image_url, is_active } = req.body;
+    // Inclui subcategory_id no desestruturação
+    const { name, description, price, stock_quantity, category, subcategory_id, image_url, is_active } = req.body;
+    
+    // AQUI ASSUMIMOS QUE O PREÇO JÁ VEIO CORRIGIDO DO FRONTEND (preço final)
+    const finalPrice = parseFloat(price);
 
     try {
         const [result] = await pool.execute(
             `UPDATE products SET 
-             name=?, description=?, price=?, stock_quantity=?, category=?, image_url=?, is_active=?
+             name=?, description=?, price=?, stock_quantity=?, category=?, subcategory_id=?, image_url=?, is_active=?
              WHERE id=? AND seller_id=?`,
-            [name, description, price, stock_quantity, category, image_url, is_active, productId, seller_id]
+            [name, description, finalPrice, stock_quantity, category, subcategory_id || null, image_url, is_active, productId, seller_id]
         );
 
         if (result.affectedRows === 0) {
@@ -177,7 +175,7 @@ router.put('/products/:id', protectSeller, async (req, res) => {
         res.status(200).json({ success: true, message: 'Produto atualizado com sucesso.' });
 
     } catch (error) {
-        console.error('[PRODUCTS] Erro ao atualizar produto:', error);
+        console.error('[PRODUCTS] ERRO ao atualizar produto:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao atualizar produto.' });
     }
 });
@@ -202,7 +200,7 @@ router.delete('/products/:id', protectSeller, async (req, res) => {
         res.status(200).json({ success: true, message: 'Produto inativado (soft delete) com sucesso.' });
 
     } catch (error) {
-        console.error('[PRODUCTS] Erro ao deletar produto:', error);
+        console.error('[PRODUCTS] ERRO ao deletar produto:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao deletar produto.' });
     }
 });
