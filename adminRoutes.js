@@ -1,18 +1,17 @@
-// ! Arquivo: adminRoutes.js (CRUD COMPLETO E CORRIGIDO)
+// ! Arquivo: adminRoutes.js (CORRIGIDO)
 const express = require('express');
 const router = express.Router();
-const mysql = require('mysql2/promise');
+// const mysql = require('mysql2/promise'); // <-- Removido
 const { protectAdmin } = require('./adminAuthMiddleware'); 
 
-// ! Configuração do Banco de Dados
-const dbConfig = { 
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    connectionLimit: 10,
-}; 
+// ! Importa o pool compartilhado
+const pool = require('./config/db'); // <-- CORREÇÃO: Importa o pool central
+
+/*
+// ! Configuração do Banco de Dados (REMOVIDA)
+const dbConfig = { ... }; 
 const pool = mysql.createPool(dbConfig);
+*/
 
 // -------------------------------------------------------------------
 // ROTA PÚBLICA PARA LISTAR CIDADES (Usada no Login/Cadastro)
