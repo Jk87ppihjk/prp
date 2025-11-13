@@ -1,4 +1,4 @@
-// ! Arquivo: storeRoutes.js (VERSÃO FINAL COM ROTA PÚBLICA)
+// ! Arquivo: storeRoutes.js (VERSÃO FINAL COM LOGS DE DEBUG)
 const express = require('express');
 const router = express.Router();
 const mysql = require('mysql2/promise');
@@ -63,51 +63,73 @@ router.get('/stores/:id', async (req, res) => {
 
 /**
  * 1. Rota para BUSCAR a loja do lojista logado (GET /api/stores/mine)
- * Usado pelo painel.html para carregar os dados
+ * USADO PELO painel.html
  */
 router.get('/stores/mine', protectSeller, async (req, res) => {
     const seller_id = req.user.id;
+    console.log(`[STORES/MINE] INÍCIO da busca para Seller ID: ${seller_id}`);
+    
     try {
-        const [rows] = await pool.execute(
-            'SELECT * FROM stores WHERE seller_id = ? LIMIT 1', 
-            [seller_id]
-        );
+        const query = 'SELECT * FROM stores WHERE seller_id = ? LIMIT 1';
+        console.log(`[STORES/MINE] Executando consulta: ${query} com [${seller_id}]`);
         
+        const [rows] = await pool.execute(query, [seller_id]);
+        
+        // ! LOG CRÍTICO QUE MOSTRARÁ A INCONSISTÊNCIA
+        console.log(`[STORES/MINE] Resultado da consulta: ${rows.length} linha(s) encontrada(s).`);
+
         if (rows.length === 0) {
+            console.warn(`[STORES/MINE] FIM: Loja não encontrada, retornando 404.`);
             return res.status(404).json({ success: false, message: 'Nenhuma loja encontrada para este lojista.' });
         }
         
+        console.log(`[STORES/MINE] FIM: Loja ID ${rows[0].id} encontrada, retornando 200.`);
         res.status(200).json({ success: true, store: rows[0] });
 
     } catch (error) {
-        console.error('[STORES] Erro ao buscar loja:', error);
+        console.error('[STORES/MINE] ERRO FATAL ao buscar loja:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao buscar dados da loja.' });
     }
 });
 
 /**
  * 2. Rota para CRIAR uma nova loja (POST /api/stores)
- * Usado pelo painel.html se GET /mine der 404
+ * USADO PELO store_setup.html
  */
 router.post('/stores', protectSeller, async (req, res) => {
     const seller_id = req.user.id;
     const { name, bio, address_line1, logo_url, banner_url } = req.body;
+    console.log(`[STORES/POST] INÍCIO da criação de loja para Seller ID: ${seller_id}`);
 
     if (!name || !address_line1) {
+        console.warn(`[STORES/POST] BLOQUEIO: Dados obrigatórios ausentes (Nome ou Endereço).`);
         return res.status(400).json({ success: false, message: 'Nome da loja e Endereço são obrigatórios.' });
     }
 
     try {
-        const [existing] = await pool.execute('SELECT id FROM stores WHERE seller_id = ?', [seller_id]);
+        // Checagem de existência (o que gera o 409)
+        const checkQuery = 'SELECT id FROM stores WHERE seller_id = ?';
+        console.log(`[STORES/POST] Verificando loja existente para o Seller ID ${seller_id}...`);
+        const [existing] = await pool.execute(checkQuery, [seller_id]);
+        
+        // ! LOG CRÍTICO QUE MOSTRARÁ A EXISTÊNCIA DO REGISTRO
+        console.log(`[STORES/POST] Resultado da verificação: ${existing.length} loja(s) encontrada(s).`);
+        
         if (existing.length > 0) {
+            console.warn(`[STORES/POST] BLOQUEIO: Loja já existe (ID: ${existing[0].id}), retornando 409.`);
             return res.status(409).json({ success: false, message: 'Este lojista já possui uma loja cadastrada.' });
         }
 
-        const [result] = await pool.execute(
-            `INSERT INTO stores (seller_id, name, bio, address_line1, logo_url, banner_url) 
-             VALUES (?, ?, ?, ?, ?, ?)`,
+        // Se passar, realiza a inserção
+        const insertQuery = `INSERT INTO stores (seller_id, name, bio, address_line1, logo_url, banner_url) 
+                             VALUES (?, ?, ?, ?, ?, ?)`;
+        console.log(`[STORES/POST] Inserindo nova loja no DB...`);
+        
+        const [result] = await pool.execute(insertQuery,
             [seller_id, name, bio || null, address_line1, logo_url || null, banner_url || null]
         );
+        
+        console.log(`[STORES/POST] SUCESSO: Loja ID ${result.insertId} criada, retornando 201.`);
         
         res.status(201).json({ 
             success: true, 
@@ -116,19 +138,20 @@ router.post('/stores', protectSeller, async (req, res) => {
         });
 
     } catch (error) {
-        console.error('[STORES] Erro ao criar loja:', error);
+        console.error('[STORES/POST] ERRO FATAL ao criar loja:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao salvar a loja.' });
     }
 });
 
 /**
  * 3. Rota para ATUALIZAR uma loja existente (PUT /api/stores/:id)
- * Usado pelo painel.html para salvar
+ * USADO PELO painel.html para salvar
  */
 router.put('/stores/:id', protectSeller, async (req, res) => {
     const seller_id = req.user.id;
     const storeId = req.params.id;
     const { name, bio, address_line1, logo_url, banner_url } = req.body;
+    console.log(`[STORES/PUT] INÍCIO da atualização da Loja ID ${storeId} para Seller ID: ${seller_id}`);
 
     if (!name || !address_line1) {
         return res.status(400).json({ success: false, message: 'Nome da loja e Endereço são obrigatórios.' });
@@ -141,15 +164,19 @@ router.put('/stores/:id', protectSeller, async (req, res) => {
              WHERE id = ? AND seller_id = ?`, // Segurança: SÓ PODE ATUALIZAR A PRÓPRIA LOJA
             [name, bio || null, address_line1, logo_url || null, banner_url || null, storeId, seller_id]
         );
+        
+        console.log(`[STORES/PUT] Linhas afetadas: ${result.affectedRows}`);
 
         if (result.affectedRows === 0) {
+            console.warn(`[STORES/PUT] FIM: Loja ID ${storeId} não encontrada ou sem permissão, retornando 404.`);
             return res.status(404).json({ success: false, message: 'Loja não encontrada ou você não tem permissão para editar.' });
         }
-
+        
+        console.log(`[STORES/PUT] SUCESSO: Loja ID ${storeId} atualizada.`);
         res.status(200).json({ success: true, message: 'Loja atualizada com sucesso.' });
 
     } catch (error) {
-        console.error('[STORES] Erro ao atualizar loja:', error);
+        console.error('[STORES/PUT] ERRO FATAL ao atualizar loja:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao atualizar a loja.' });
     }
 });
