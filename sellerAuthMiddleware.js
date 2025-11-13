@@ -1,23 +1,18 @@
-// ! Arquivo: sellerAuthMiddleware.js
+// ! Arquivo: sellerAuthMiddleware.js (CORRIGIDO)
 const jwt = require('jsonwebtoken');
-const mysql = require('mysql2/promise');
+// const mysql = require('mysql2/promise'); // <-- Removido
 
 // --- Configurações de Ambiente ---
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// ! Configuração da Conexão com o Banco de Dados
-// É crucial que estas variáveis de ambiente estejam configuradas no Render!
-const dbConfig = { 
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    connectionLimit: 10,
-}; 
+// ! Importa o pool compartilhado
+const pool = require('./config/db'); // <-- CORREÇÃO: Importa o pool central
 
-// Criação do Pool de Conexões (necessário para buscar o is_seller)
+/*
+// ! Configuração da Conexão com o Banco de Dados (REMOVIDA)
+const dbConfig = { ... }; 
 const pool = mysql.createPool(dbConfig);
-
+*/
 
 /**
  * Middleware para proteger rotas e garantir que APENAS LOJISTAS tenham acesso.
@@ -38,8 +33,9 @@ const protectSeller = async (req, res, next) => {
             console.log(`[AUTH] Token decodificado. ID: ${decoded.id}`);
             
             // 2. Buscar o perfil completo (incluindo o flag is_seller) no DB
+            // (Usei SELECT * para garantir que todos os dados do usuário estejam disponíveis)
             const [rows] = await pool.execute(
-                'SELECT id, is_seller FROM users WHERE id = ? LIMIT 1', 
+                'SELECT * FROM users WHERE id = ? LIMIT 1', 
                 [decoded.id]
             );
             const user = rows[0];
@@ -58,7 +54,11 @@ const protectSeller = async (req, res, next) => {
 
             // 4. Se for lojista (is_seller = TRUE), prossegue
             console.log(`[AUTH] SUCESSO: Lojista ID ${user.id} autorizado.`);
-            req.user = decoded; 
+            
+            // ! CORREÇÃO DO MIDDLEWARE: Passa os dados frescos do DB (user) em vez dos dados do token (decoded)
+            // req.user = decoded; // <-- Linha antiga
+            req.user = user; // <-- CORRETO
+            
             next();
 
         } catch (error) {
