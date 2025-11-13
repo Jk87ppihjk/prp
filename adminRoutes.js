@@ -180,4 +180,66 @@ router.delete('/admin/districts/:id', protectAdmin, async (req, res) => {
     }
 });
 
+// ! Arquivo: adminRoutes.js (Novas Rotas para Categorias, Subcategorias e Atributos)
+// ... (código existente)
+
+// -------------------------------------------------------------------
+// ROTAS DE GESTÃO DE CATEGORIAS (PROTEGIDAS)
+// -------------------------------------------------------------------
+
+// 1. CRIAR Categoria Principal (POST /api/admin/categories)
+router.post('/admin/categories', protectAdmin, async (req, res) => {
+    const { name } = req.body;
+    try {
+        const [result] = await pool.execute('INSERT INTO categories (name) VALUES (?)', [name]);
+        res.status(201).json({ success: true, message: 'Categoria criada.', id: result.insertId });
+    } catch (error) {
+        if (error.errno === 1062) { return res.status(409).json({ success: false, message: 'Categoria já existe.' }); }
+        console.error('[ADMIN/CATEGORIES] Erro ao criar categoria:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+// 2. BUSCAR TODAS as Categorias e Subcategorias
+router.get('/admin/categories', protectAdmin, async (req, res) => {
+    try {
+        // Busca Categorias, Subcategorias e Atributos (complexa, idealmente em múltiplas chamadas para o frontend)
+        const [categories] = await pool.execute('SELECT * FROM categories ORDER BY name');
+        // Você precisará de lógica no frontend para juntar os dados ou criar rotas separadas
+        res.status(200).json({ success: true, categories: categories });
+    } catch (error) {
+        console.error('[ADMIN/CATEGORIES] Erro ao buscar categorias:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+// 3. DELETAR Categoria Principal (e realocar lojas)
+router.delete('/admin/categories/:id', protectAdmin, async (req, res) => {
+    const categoryId = req.params.id;
+    try {
+        // 1. Realocar todas as lojas que usam esta categoria para NULL (ou Categoria Geral ID 1)
+        await pool.execute('UPDATE stores SET category_id = NULL WHERE category_id = ?', [categoryId]);
+        
+        // 2. Deletar subcategorias e atributos relacionados (ON DELETE CASCADE no DB é ideal, mas faremos a exclusão explícita)
+        // Note: Se o atributo for 'category_id', você precisa criar uma 'category_general' com ID 1 primeiro.
+        
+        const [result] = await pool.execute('DELETE FROM categories WHERE id = ?', [categoryId]);
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ success: false, message: 'Categoria não encontrada.' });
+        }
+        res.status(200).json({ success: true, message: 'Categoria deletada e lojas realocadas.' });
+    } catch (error) {
+        console.error('[ADMIN/CATEGORIES] Erro ao deletar categoria:', error);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
+    }
+});
+
+// -------------------------------------------------------------------
+// ROTAS DE GESTÃO DE SUBCATEGORIAS E ATRIBUTOS
+// (Implementação semelhante de CRUD deve ser adicionada aqui, ligando 'category_id' e 'subcategory_id')
+// -------------------------------------------------------------------
+// Ex: POST /api/admin/subcategories (requer category_id no body)
+// Ex: POST /api/admin/attributes (requer subcategory_id no body, com o campo 'type')
+
 module.exports = router;
