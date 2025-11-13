@@ -42,6 +42,23 @@ router.get('/categories', async (req, res) => {
     }
 });
 
+// ! adminRoutes.js (ADICIONAR ROTA PÚBLICA DE SUBCATEGORIAS)
+
+// ROTA PÚBLICA 3: LISTAR SUBCATEGORIAS POR CATEGORIA ID
+router.get('/subcategories/:categoryId', async (req, res) => {
+    const categoryId = req.params.categoryId;
+    try {
+        const [subcategories] = await pool.execute(
+            'SELECT id, name FROM subcategories WHERE category_id = ? ORDER BY name', 
+            [categoryId]
+        );
+        res.status(200).json({ success: true, subcategories: subcategories });
+    } catch (error) {
+        console.error('[PUBLIC/SUBCATEGORIES] Erro ao buscar subcategorias:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao listar subcategorias.' });
+    }
+});
+
 
 // -------------------------------------------------------------------
 // ROTAS DE GESTÃO DE CIDADES (CRUD) - PROTEGIDAS POR ADMIN
