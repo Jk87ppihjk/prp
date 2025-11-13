@@ -1,19 +1,17 @@
-// ! Arquivo: adminAuthMiddleware.js
+// ! Arquivo: adminAuthMiddleware.js (CORRIGIDO)
 const jwt = require('jsonwebtoken');
-const mysql = require('mysql2/promise');
+// const mysql = require('mysql2/promise'); // <-- Removido
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// ! Configuração do Banco de Dados (deve ser a mesma em todos os arquivos)
-const dbConfig = { 
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    connectionLimit: 10,
-}; 
-const pool = mysql.createPool(dbConfig);
+// ! Importa o pool compartilhado
+const pool = require('./config/db'); // <-- CORREÇÃO: Importa o pool central
 
+/*
+// ! Configuração do Banco de Dados (REMOVIDA)
+const dbConfig = { ... }; 
+const pool = mysql.createPool(dbConfig);
+*/
 
 /**
  * Middleware para proteger rotas e garantir que APENAS ADMINISTRADORES (is_admin=TRUE) tenham acesso.
@@ -33,7 +31,7 @@ const protectAdmin = async (req, res, next) => {
             
             // 2. Buscar o perfil completo (incluindo o flag is_admin) no DB
             const [rows] = await pool.execute(
-                'SELECT id, is_admin FROM users WHERE id = ? LIMIT 1', 
+                'SELECT * FROM users WHERE id = ? LIMIT 1', // (Usei SELECT *)
                 [decoded.id]
             );
             const user = rows[0];
@@ -48,7 +46,10 @@ const protectAdmin = async (req, res, next) => {
             }
 
             // 4. Se for Admin, prossegue
-            req.user = decoded; 
+            // ! CORREÇÃO DO MIDDLEWARE: Passa os dados frescos do DB (user)
+            // req.user = decoded; // <-- Linha antiga
+            req.user = user; // <-- CORRETO
+            
             next();
 
         } catch (error) {
