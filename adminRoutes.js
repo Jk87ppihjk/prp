@@ -1,4 +1,4 @@
-// ! Arquivo: adminRoutes.js (CRUD COMPLETO E CORRIGIDO)
+// ! Arquivo: adminRoutes.js (CRUD COMPLETO E FINALIZADO)
 const express = require('express');
 const router = express.Router();
 const mysql = require('mysql2/promise');
@@ -18,10 +18,9 @@ const pool = mysql.createPool(dbConfig);
 // ROTAS PÚBLICAS (Acessíveis por qualquer cliente/lojista)
 // -------------------------------------------------------------------
 
-// ROTA PÚBLICA 1: LISTAR CIDADES (Usada no Login/Cadastro)
+// ROTA PÚBLICA 1: LISTAR CIDADES
 router.get('/cities', async (req, res) => {
     try {
-        // Seleciona apenas cidades ativas para o frontend
         const [cities] = await pool.execute(
             'SELECT id, name, state_province FROM cities WHERE is_active = TRUE ORDER BY name'
         );
@@ -32,10 +31,9 @@ router.get('/cities', async (req, res) => {
     }
 });
 
-// ROTA PÚBLICA 2: LISTAR CATEGORIAS (NOVA ROTA PARA O PAINEL DO LOJISTA)
+// ROTA PÚBLICA 2: LISTAR CATEGORIAS (CORREÇÃO PARA O PAINEL DO LOJISTA)
 router.get('/categories', async (req, res) => {
     try {
-        // Seleciona apenas o essencial: ID e Nome
         const [categories] = await pool.execute('SELECT id, name FROM categories ORDER BY name');
         res.status(200).json({ success: true, categories: categories });
     } catch (error) {
@@ -236,16 +234,16 @@ router.put('/admin/categories/:id', protectAdmin, async (req, res) => {
 router.delete('/admin/categories/:id', protectAdmin, async (req, res) => {
     const categoryId = req.params.id;
     
-    // NOTA: O ID 1 é reservado para 'Categoria Geral' e não deve ser deletado.
+    // Bloqueia exclusão da Categoria Geral (ID 1)
     if (parseInt(categoryId) === 1) {
         return res.status(403).json({ success: false, message: 'A Categoria Geral não pode ser excluída.' });
     }
 
     try {
-        // 1. Realocar todas as lojas que usam esta categoria para NULL (Fallback)
+        // Realoca todas as lojas que usam esta categoria para NULL (Fallback)
         await pool.execute('UPDATE stores SET category_id = NULL WHERE category_id = ?', [categoryId]);
         
-        // 2. Deletar a categoria (Subcategorias e Atributos são excluídos via ON DELETE CASCADE no SQL)
+        // Deleta a categoria
         const [result] = await pool.execute('DELETE FROM categories WHERE id = ?', [categoryId]);
 
         if (result.affectedRows === 0) {
