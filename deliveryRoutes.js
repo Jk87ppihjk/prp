@@ -6,6 +6,9 @@ const { protectSeller } = require('./sellerAuthMiddleware');
 const { protectDeliveryPerson } = require('./deliveryAuthMiddleware');
 const { protect } = require('./authMiddleware'); // Proteção de usuário geral
 
+// NOVO: Importa o serviço de pagamento AbacatePay
+const abacatePayService = require('./abacatePayService'); 
+
 // --- Constantes de Regras de Negócio ---
 const MARKETPLACE_FEE_RATE = 0.05; // 5% do Marketplace (para vendas sem contrato)
 const DELIVERY_FEE = 5.00;         // R$ 5,00 que vai para o entregador (se for do Marketplace)
@@ -70,32 +73,49 @@ router.put('/delivery/contract/:storeId', protectSeller, async (req, res) => {
 /**
  * Rota 2: Cria um NOVO Pedido (POST /api/delivery/orders)
  * Simula a finalização da compra pelo cliente.
+ * * ATUALIZADO: Inclui integração com AbacatePay.
  */
 router.post('/delivery/orders', protect, async (req, res) => {
     // ATENÇÃO: Esta é uma rota simplificada. Em um sistema real, ela receberia os
     // itens do carrinho, calcularia o total e registraria o pedido.
     const buyerId = req.user.id;
-    const { store_id, items, total_amount } = req.body; // Supondo que você enviou items e o total do frontend
+    // Adiciona 'payment_token' na desestruturação
+    const { store_id, items, total_amount, payment_token } = req.body; 
 
-    if (!store_id || !items || items.length === 0 || !total_amount) {
-        return res.status(400).json({ success: false, message: 'Dados do pedido incompletos.' });
+    // Adiciona validação para o token de pagamento
+    if (!store_id || !items || items.length === 0 || !total_amount || !payment_token) {
+        return res.status(400).json({ success: false, message: 'Dados do pedido incompletos, o token de pagamento é obrigatório.' });
     }
 
     // Gerar um código de entrega de 6 dígitos para confirmação futura
     const deliveryCode = Math.random().toString(36).substring(2, 8).toUpperCase(); 
 
     try {
+        // 1. PROCESSAR PAGAMENTO COM ABACATEPAY
+        const paymentResult = await abacatePayService.createPayment(
+            total_amount, 
+            payment_token, 
+            `Pedido #${deliveryCode}`
+        );
+        
+        // Verifica se o pagamento foi bem-sucedido
+        if (!paymentResult.success) {
+             // 402 Payment Required é o código HTTP ideal para pagamento recusado
+             return res.status(402).json({ success: false, message: 'Pagamento recusado pela AbacatePay.' });
+        }
+
         await pool.query('BEGIN'); // Inicia a transação
 
-        // 1. Cria o Pedido principal
+        // 2. Cria o Pedido principal (Inclui payment_transaction_id)
+        // NOTA: Assumindo que a coluna payment_transaction_id existe na tabela orders
         const [orderResult] = await pool.execute(
-            `INSERT INTO orders (buyer_id, store_id, total_amount, status, delivery_code) 
-             VALUES (?, ?, ?, 'Processing', ?)`,
-            [buyerId, store_id, total_amount, deliveryCode]
+            `INSERT INTO orders (buyer_id, store_id, total_amount, status, delivery_code, payment_transaction_id) 
+             VALUES (?, ?, ?, 'Processing', ?, ?)`,
+            [buyerId, store_id, total_amount, deliveryCode, paymentResult.transaction_id]
         );
         const orderId = orderResult.insertId;
 
-        // 2. Insere os Itens do Pedido (simplificado: você precisará criar a tabela order_items)
+        // 3. Insere os Itens do Pedido (simplificado)
         // items.forEach(item => { /* INSERT INTO order_items ... */ });
 
         await pool.query('COMMIT'); // Finaliza a transação
@@ -105,14 +125,18 @@ router.post('/delivery/orders', protect, async (req, res) => {
 
         res.status(201).json({ 
             success: true, 
-            message: 'Pedido criado com sucesso! Vendedor notificado.', 
-            order_id: orderId 
+            message: 'Pagamento processado e pedido criado com sucesso!', 
+            order_id: orderId,
+            transaction_id: paymentResult.transaction_id // Retorna o ID da transação
         });
 
     } catch (error) {
         await pool.query('ROLLBACK'); // Desfaz a transação em caso de erro
-        console.error('[DELIVERY/ORDERS] Erro ao criar pedido:', error);
-        res.status(500).json({ success: false, message: 'Erro interno ao criar pedido.' });
+        console.error('[DELIVERY/ORDERS] Erro no fluxo do pedido:', error.message);
+        
+        // Retorna 402 se for uma falha de pagamento ou 500 para outros erros
+        const status = error.message.includes('Falha no pagamento') ? 402 : 500;
+        res.status(status).json({ success: false, message: error.message || 'Erro interno ao processar pedido.' });
     }
 });
 
