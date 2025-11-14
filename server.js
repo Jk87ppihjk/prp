@@ -1,4 +1,4 @@
-// ! Arquivo: server.js (CORRIGIDO PARA MYSQL E DELIVERY ROUTES)
+// ! Arquivo: server.js (ATUALIZADO PARA ROTAS MODULARIZADAS)
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config(); // Carrega as variáveis de ambiente (DB_HOST, JWT_SECRET, etc)
@@ -10,24 +10,32 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// --- Importação das Rotas Corretas ---
+// --- Importação das Rotas Modulares ---
 const loginRoutes = require('./login');
 const adminRoutes = require('./adminRoutes');
 const productRoutes = require('./productRoutes');
 const storeRoutes = require('./storeRoutes');
 const fyRoutes = require('./fyRoutes');
 const uploadRoutes = require('./uploadRoutes');
-const deliveryRoutes = require('./deliveryRoutes'); // NOVO: Rotas de Entrega e Pedidos
+
+// NOVO: As três partes das rotas de entrega
+const orderCreationRoutes = require('./orderCreationRoutes');
+const logisticsAndConfirmationRoutes = require('./logisticsAndConfirmationRoutes');
+const trackingAndDataRoutes = require('./trackingAndDataRoutes');
 
 // --- Uso das Rotas ---
-// O prefixo /api é adicionado aqui para corresponder ao login.js e adminRoutes.js
+// O prefixo /api é adicionado aqui
 app.use('/api', loginRoutes);
 app.use('/api', adminRoutes);
 app.use('/api', productRoutes);
 app.use('/api', storeRoutes);
 app.use('/api', fyRoutes);
-app.use('/api', uploadRoutes); 
-app.use('/api', deliveryRoutes); // NOVO: Rota de Pedidos/Entregas
+app.use('/api', uploadRoutes);
+
+// NOVO: Registro das rotas modulares de delivery sob o prefixo /delivery
+app.use('/api/delivery', orderCreationRoutes);
+app.use('/api/delivery', logisticsAndConfirmationRoutes);
+app.use('/api/delivery', trackingAndDataRoutes);
 
 // Rota "raiz" para verificar se o servidor está online
 app.get('/', (req, res) => {
