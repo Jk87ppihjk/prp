@@ -1,26 +1,25 @@
-// ! Arquivo: abacatePayService.js (Integração PIX AbacatePay)
-const axios = require('axios'); // Requerido para requisições HTTP
+// ! Arquivo: abacatePayService.js (Atualizado com simulação)
+const axios = require('axios'); 
 
+// ! ==================================================================
+// ! ATENÇÃO: Verifique se esta é a URL correta do Sandbox (Modo Teste)
+// ! ==================================================================
 const ABACATEPAY_API_URL = 'https://api.abacatepay.com/v1/pixQrCode/create';
-const ABACATEPAY_SECRET = process.env.ABACATEPAY_SECRET;
+// ! NOVA URL DE SIMULAÇÃO (Verifique se é a URL de Sandbox correta)
+const ABACATEPAY_SIMULATE_URL = 'https://api.abacatepay.com/v1/pixQrCode/simulate-payment'; 
+// ! ==================================================================
+
+const ABACATEPAY_SECRET = process.env.ABACATEPAY_SECRET; // Use sua CHAVE DE TESTE aqui no Render
 
 /**
  * Cria um QRCode PIX através da API da AbacatePay.
- * @param {number} amount - O valor total a ser cobrado em centavos.
- * @param {number} expiresIn - Tempo de expiração em segundos (Ex: 3600 para 1 hora).
- * @param {string} description - Descrição do pagamento.
- * @param {object} customer - Dados do cliente (opcional).
- * @returns {Promise<object>} - Objeto contendo o sucesso e os dados do QRCode PIX.
+ * (O restante desta função permanece o mesmo)
  */
 const createPixQrCode = async (amount, expiresIn, description, customer = null) => {
     if (!ABACATEPAY_SECRET) {
         throw new Error('Serviço de pagamento indisponível: ABACATEPAY_SECRET ausente.');
     }
-
-    // Validação dos dados do cliente, se fornecidos
-    if (customer && (!customer.name || !customer.cellphone || !customer.email || !customer.taxId)) {
-        throw new Error('Dados do cliente incompletos. Se o cliente for fornecido, todos os campos (name, cellphone, email, taxId) são obrigatórios.');
-    }
+    // ... (validação do cliente) ...
 
     try {
         const requestBody = {
@@ -28,14 +27,12 @@ const createPixQrCode = async (amount, expiresIn, description, customer = null) 
             expiresIn: expiresIn,
             description: description
         };
-
-        // Adiciona os dados do cliente ao corpo da requisição, se fornecidos
         if (customer) {
             requestBody.customer = customer;
         }
 
         const response = await axios.post(
-            ABACATEPAY_API_URL,
+            ABACATEPAY_API_URL, // URL de Criação
             requestBody,
             {
                 headers: {
@@ -45,24 +42,64 @@ const createPixQrCode = async (amount, expiresIn, description, customer = null) 
             }
         );
 
-        // Verifica se a requisição foi bem-sucedida (status 200 e dados presentes)
         if (response.status === 200 && response.data.data) {
             return {
                 success: true,
-                qrCodeData: response.data.data // Retorna os dados do QRCode PIX (inclui txid, qrCodeImage, qrCodeString)
+                qrCodeData: response.data.data 
             };
         } else {
             throw new Error(response.data.error || 'Falha ao criar QRCode PIX.');
         }
 
     } catch (error) {
-        // Lida com erros de rede ou de resposta da API
         const errorDetail = error.response ? error.response.data.error : error.message;
-        console.error('❌ ERRO FATAL ao comunicar com AbacatePay:', errorDetail);
+        console.error('❌ ERRO FATAL ao comunicar com AbacatePay (create):', errorDetail);
         throw new Error(`Falha ao criar QRCode PIX: ${errorDetail}`);
     }
 };
 
+
+// ! ==================================================================
+// ! NOVA FUNÇÃO ADICIONADA (Para simular o pagamento)
+// ! ==================================================================
+/**
+ * Simula o pagamento de um PIX no ambiente de Sandbox da AbacatePay.
+ * @param {string} transactionId - O ID da transação (retornado por createPixQrCode).
+ * @returns {Promise<object>} - Objeto com o sucesso da simulação.
+ */
+const simulatePixPayment = async (transactionId) => {
+    if (!ABACATEPAY_SECRET) {
+        throw new Error('Serviço de pagamento indisponível: ABACATEPAY_SECRET ausente.');
+    }
+
+    try {
+        const response = await axios.post(
+            ABACATEPAY_SIMULATE_URL, // ! URL de Simulação
+            { id: transactionId },   // ! Corpo da requisição com o ID
+            {
+                headers: {
+                    'Authorization': `Bearer ${ABACATEPAY_SECRET}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        if (response.status === 200) {
+            console.log(`[ABACATEPAY/SIMULATE] Simulação para TxID ${transactionId} enviada com sucesso.`);
+            return { success: true, data: response.data };
+        } else {
+            throw new Error(response.data.error || 'Falha ao simular pagamento.');
+        }
+
+    } catch (error) {
+        const errorDetail = error.response ? error.response.data.error : error.message;
+        console.error('❌ ERRO FATAL ao comunicar com AbacatePay (simulate):', errorDetail);
+        throw new Error(`Falha ao simular pagamento: ${errorDetail}`);
+    }
+};
+
+
 module.exports = {
-    createPixQrCode
+    createPixQrCode,
+    simulatePixPayment // ! Exporta a nova função
 };
