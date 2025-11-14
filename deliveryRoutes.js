@@ -1,4 +1,4 @@
-// ! Arquivo: deliveryRoutes.js (Versão Final COMPLETA E UNIFICADA)
+// ! Arquivo: deliveryRoutes.js (VERSÃO FINAL COMPLETA E UNIFICADA - ROTAS 1 a 11)
 
 const express = require('express');
 const router = express.Router();
@@ -62,7 +62,7 @@ router.put('/delivery/contract/:storeId', protectSeller, async (req, res) => {
 
 
 // ===================================================================
-// ROTAS DE PEDIDOS (Usado pelo Comprador/Vendedor)
+// ROTAS DE PEDIDOS (Comprador/Vendedor)
 // ===================================================================
 
 /**
@@ -88,7 +88,7 @@ router.post('/delivery/orders', protect, async (req, res) => {
             description
         );
         
-        // Assumindo que o ID da transação é 'id' e não 'txid'
+        // Assumindo que o ID da transação é 'id'
         if (!pixResult.success || !pixResult.qrCodeData.id) { 
              throw new Error('Falha ao gerar o QRCode PIX ou ID da transação ausente.');
         }
@@ -138,8 +138,8 @@ router.post('/delivery/orders/simulate-purchase', protect, async (req, res) => {
     }
 
     const deliveryCode = Math.random().toString(36).substring(2, 8).toUpperCase(); 
-    const transactionId = 'SIMULATED_PURCHASE'; // Marcador de simulação
-    const simulatedStatus = 'Processing'; // Pago e pronto para processamento
+    const transactionId = 'SIMULATED_PURCHASE'; 
+    const simulatedStatus = 'Processing'; 
 
     try {
         await pool.query('BEGIN'); 
@@ -165,8 +165,6 @@ router.post('/delivery/orders/simulate-purchase', protect, async (req, res) => {
         }
         
         await pool.query('COMMIT'); 
-
-        console.log(`[SIMULATED] NOVO PEDIDO SIMULADO ${orderId} criado para Store ${store_id}. Status: Processing.`);
 
         res.status(201).json({ 
             success: true, 
@@ -232,7 +230,7 @@ router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (re
         // 2. Se não for 'Seller', cria o registro na tabela 'deliveries'
         if (method !== 'Seller') {
             
-            // ! CORREÇÃO: Adiciona delivery_method na inserção
+            // Adiciona delivery_method na inserção (Correção de schema)
             const [deliveryResult] = await pool.execute(
                 `INSERT INTO deliveries (order_id, delivery_person_id, status, delivery_method) VALUES (?, ?, ?, ?)`,
                 [orderId, deliveryPersonId, deliveryPersonId ? 'Accepted' : 'Requested', method]
@@ -240,7 +238,6 @@ router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (re
 
             if (method === 'Contracted' && deliveryPersonId) {
                  await pool.execute('UPDATE users SET is_available = FALSE WHERE id = ?', [deliveryPersonId]);
-                 console.log(`[LOGISTICA] Entregador Contratado ID ${deliveryPersonId} está em rota.`);
             }
         }
 
@@ -280,15 +277,12 @@ router.put('/delivery/orders/:orderId/dispatch', protectSeller, async (req, res)
             [orderId]
         );
         
-        // 3. Cria o registro de entrega
-        // ! CORREÇÃO: Adiciona delivery_method na inserção
+        // 3. Cria o registro de entrega (Correção de schema)
         await pool.execute(
             `INSERT INTO deliveries (order_id, delivery_person_id, status, delivery_method) 
              VALUES (?, NULL, 'Accepted', 'Seller')`, 
             [orderId]
         );
-
-        console.log(`[DISPATCH] Pedido ${orderId} despachado (Self-Delivery). Status: Delivering.`);
 
         res.status(200).json({ success: true, message: 'Pedido despachado! Pronto para a entrega.' });
 
@@ -453,7 +447,7 @@ router.put('/delivery/accept/:orderId', protectDeliveryPerson, async (req, res) 
 
 /**
  * Rota 6: Confirmação de Entrega (POST /api/delivery/confirm)
- * Confirma a entrega via código e atualiza o saldo.
+ * Confirma a entrega via código e atualiza o saldo (Lógica Financeira Corrigida).
  */
 router.post('/delivery/confirm', protect, async (req, res) => {
     const userId = req.user.id; 
@@ -462,7 +456,6 @@ router.post('/delivery/confirm', protect, async (req, res) => {
     try {
         await pool.query('BEGIN');
         
-        // 1. Busca o pedido e verifica o código
         const [orderRows] = await pool.execute(
             `SELECT o.*, s.seller_id, s.contracted_delivery_person_id, d.delivery_person_id 
              FROM orders o
@@ -480,13 +473,11 @@ router.post('/delivery/confirm', protect, async (req, res) => {
 
         const isDeliveryPerson = (order.delivery_person_id === userId);
         
-        // Permissão: Comprador (buyerId) ou Entregador (delivery_person_id)
         if (order.buyer_id !== userId && !isDeliveryPerson) {
              await pool.query('ROLLBACK');
              return res.status(403).json({ success: false, message: 'Apenas o comprador ou entregador atribuído pode confirmar.' });
         }
         
-        // 3. Processamento Financeiro e Status
         let paymentMessage = 'Pagamento em processamento.';
         
         // Regras Financeiras:
