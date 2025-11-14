@@ -6,8 +6,8 @@ const { protectSeller } = require('./sellerAuthMiddleware');
 const { protectDeliveryPerson } = require('./deliveryAuthMiddleware');
 const { protect } = require('./authMiddleware'); // Proteção de usuário geral
 
-// NOVO: Importa o serviço de pagamento AbacatePay
-const abacatePayService = require('./abacatePayService'); 
+// NOVO: Importa o serviço de pagamento PIX
+const { createPixQrCode } = require('./abacatePayService');
 
 // --- Constantes de Regras de Negócio ---
 const MARKETPLACE_FEE_RATE = 0.05; // 5% do Marketplace (para vendas sem contrato)
@@ -72,50 +72,52 @@ router.put('/delivery/contract/:storeId', protectSeller, async (req, res) => {
 
 /**
  * Rota 2: Cria um NOVO Pedido (POST /api/delivery/orders)
- * Simula a finalização da compra pelo cliente.
- * * ATUALIZADO: Inclui integração com AbacatePay.
+ * ATUALIZADO: Processa o pagamento via geração de QRCode PIX (AbacatePay)
  */
 router.post('/delivery/orders', protect, async (req, res) => {
-    // ATENÇÃO: Esta é uma rota simplificada. Em um sistema real, ela receberia os
-    // itens do carrinho, calcularia o total e registraria o pedido.
     const buyerId = req.user.id;
-    // Adiciona 'payment_token' na desestruturação
-    const { store_id, items, total_amount, payment_token } = req.body; 
+    // Não é necessário 'payment_token'
+    const { store_id, items, total_amount } = req.body; 
 
-    // Adiciona validação para o token de pagamento
-    if (!store_id || !items || items.length === 0 || !total_amount || !payment_token) {
-        return res.status(400).json({ success: false, message: 'Dados do pedido incompletos, o token de pagamento é obrigatório.' });
+    if (!store_id || !items || items.length === 0 || !total_amount) {
+        return res.status(400).json({ success: false, message: 'Dados do pedido incompletos.' });
     }
 
-    // Gerar um código de entrega de 6 dígitos para confirmação futura
     const deliveryCode = Math.random().toString(36).substring(2, 8).toUpperCase(); 
+    
+    // Converte o valor de Reais para CENTAVOS (obrigatório pelo AbacatePay)
+    const amountInCents = Math.round(total_amount * 100);
+    const expiresIn = 3600; // QR Code expira em 1 hora
+    const description = `Pagamento Pedido ${deliveryCode}`;
+
 
     try {
-        // 1. PROCESSAR PAGAMENTO COM ABACATEPAY
-        const paymentResult = await abacatePayService.createPayment(
-            total_amount, 
-            payment_token, 
-            `Pedido #${deliveryCode}`
+        // 1. GERAR QR CODE PIX COM ABACATEPAY
+        const pixResult = await createPixQrCode(
+            amountInCents, 
+            expiresIn, 
+            description
+            // O objeto 'customer' é opcional aqui (setado como 'null' no serviço)
         );
         
-        // Verifica se o pagamento foi bem-sucedido
-        if (!paymentResult.success) {
-             // 402 Payment Required é o código HTTP ideal para pagamento recusado
-             return res.status(402).json({ success: false, message: 'Pagamento recusado pela AbacatePay.' });
+        // Verifica se a geração foi bem-sucedida e se o ID da transação (txid) está presente
+        if (!pixResult.success || !pixResult.qrCodeData.txid) {
+             throw new Error('Falha ao gerar o QRCode PIX ou ID da transação ausente.');
         }
+
+        const transactionId = pixResult.qrCodeData.txid; 
 
         await pool.query('BEGIN'); // Inicia a transação
 
-        // 2. Cria o Pedido principal (Inclui payment_transaction_id)
-        // NOTA: Assumindo que a coluna payment_transaction_id existe na tabela orders
+        // 2. Cria o Pedido principal (Status inicial: 'Pending Payment')
         const [orderResult] = await pool.execute(
             `INSERT INTO orders (buyer_id, store_id, total_amount, status, delivery_code, payment_transaction_id) 
-             VALUES (?, ?, ?, 'Processing', ?, ?)`,
-            [buyerId, store_id, total_amount, deliveryCode, paymentResult.transaction_id]
+             VALUES (?, ?, ?, 'Pending Payment', ?, ?)`,
+            [buyerId, store_id, total_amount, deliveryCode, transactionId]
         );
         const orderId = orderResult.insertId;
 
-        // 3. Insere os Itens do Pedido (simplificado)
+        // 3. Insere os Itens do Pedido (simplificado: você precisará criar a tabela order_items)
         // items.forEach(item => { /* INSERT INTO order_items ... */ });
 
         await pool.query('COMMIT'); // Finaliza a transação
@@ -125,17 +127,17 @@ router.post('/delivery/orders', protect, async (req, res) => {
 
         res.status(201).json({ 
             success: true, 
-            message: 'Pagamento processado e pedido criado com sucesso!', 
+            message: 'Pedido criado com sucesso. O pagamento deve ser feito via PIX.', 
             order_id: orderId,
-            transaction_id: paymentResult.transaction_id // Retorna o ID da transação
+            pix_qr_code: pixResult.qrCodeData // Retorna os dados do QR Code para o frontend fazer a cobrança
         });
 
     } catch (error) {
         await pool.query('ROLLBACK'); // Desfaz a transação em caso de erro
         console.error('[DELIVERY/ORDERS] Erro no fluxo do pedido:', error.message);
         
-        // Retorna 402 se for uma falha de pagamento ou 500 para outros erros
-        const status = error.message.includes('Falha no pagamento') ? 402 : 500;
+        // Retorna 402 se for uma falha de pagamento (API do PIX) ou 500 para outros erros
+        const status = error.message.includes('QRCode PIX') ? 402 : 500;
         res.status(status).json({ success: false, message: error.message || 'Erro interno ao processar pedido.' });
     }
 });
