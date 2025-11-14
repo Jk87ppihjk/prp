@@ -1,11 +1,11 @@
-// ! Arquivo: login.js (CORRIGIDO para aceitar 'is_delivery_person')
+// ! Arquivo: login.js (CORRIGIDO com Rota GET /user/me)
 
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken'); 
 const brevoService = require('./brevoService');
-const { protect } = require('./authMiddleware'); 
+const { protect } = require('./authMiddleware'); // Middleware de proteção geral
 
 // --- Configurações de Segurança e Ambiente ---
 const SALT_ROUNDS = 10; 
@@ -20,8 +20,7 @@ const pool = require('./config/db');
 // -------------------------------------------------------------------
 
 router.post('/register', async (req, res) => {
-    
-    // *** CORREÇÃO 1: Captura o 'is_delivery_person' do body ***
+    // Captura 'is_delivery_person'
     const { email, password, city, full_name, is_seller, is_delivery_person } = req.body; 
     
     if (!email || !password || !city) {
@@ -36,7 +35,7 @@ router.post('/register', async (req, res) => {
     try {
         const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
         
-        // *** CORREÇÃO 2: Adiciona 'is_delivery_person' no INSERT SQL ***
+        // Adiciona 'is_delivery_person' no INSERT SQL
         await pool.execute(
             `INSERT INTO users (email, password_hash, city, full_name, is_seller, is_delivery_person, is_admin) 
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -45,16 +44,15 @@ router.post('/register', async (req, res) => {
                 passwordHash, 
                 city, 
                 full_name || null, 
-                is_seller || false,          // Garante que é false se nulo
-                is_delivery_person || false, // Garante que é false se nulo
-                false                        // is_admin
+                is_seller || false,          
+                is_delivery_person || false, 
+                false                       
             ] 
         );
 
         brevoService.sendWelcomeEmail(email, full_name || 'Usuário')
             .catch(err => console.error('Erro ao chamar o serviço Brevo após registro:', err));
         
-        // Mensagem pós-registro
         let roleText = 'Comprador';
         if (is_seller) roleText = 'Lojista';
         if (is_delivery_person) roleText = 'Entregador';
@@ -86,9 +84,9 @@ router.post('/login', async (req, res) => {
     }
 
     try {
-        // *** CORREÇÃO 3: Busca o 'is_delivery_person' no SELECT ***
+        // Busca o 'is_delivery_person' e 'pending_balance' no SELECT
         const [rows] = await pool.execute(
-            'SELECT id, password_hash, email, city, full_name, is_seller, is_admin, is_delivery_person FROM users WHERE email = ? LIMIT 1', 
+            'SELECT id, password_hash, email, city, full_name, is_seller, is_admin, is_delivery_person, is_available, pending_balance FROM users WHERE email = ? LIMIT 1', 
             [email]
         );
 
@@ -104,15 +102,15 @@ router.post('/login', async (req, res) => {
         
         // --- LOGIN VÁLIDO ---
         
-        // 3. Checagem de Setup Inicial
+        // 3. Checagem de Setup Inicial e Definição de Role
         let needsSetup = false;
         let setupType = null;
+        let userRole = 'buyer'; 
         
-        // *** CORREÇÃO 4: Define o 'role' baseado nos flags do DB ***
-        let userRole = 'buyer'; // Padrão
         if (user.is_admin) {
             userRole = 'admin';
-            needsSetup = false;
+        } else if (user.is_delivery_person) {
+            userRole = 'delivery_person';
         } else if (user.is_seller) {
             userRole = 'seller';
             const [storeRows] = await pool.execute('SELECT id FROM stores WHERE seller_id = ? LIMIT 1', [user.id]);
@@ -120,9 +118,6 @@ router.post('/login', async (req, res) => {
                 needsSetup = true;
                 setupType = 'store_setup'; 
             }
-        } else if (user.is_delivery_person) {
-            userRole = 'delivery_person';
-            needsSetup = false; // Entregador não precisa de setup (por enquanto)
         } else { 
             // Comprador (buyer)
             const [addressRows] = await pool.execute('SELECT id FROM addresses WHERE user_id = ? LIMIT 1', [user.id]);
@@ -136,17 +131,17 @@ router.post('/login', async (req, res) => {
         const tokenPayload = {
             id: user.id,
             email: user.email,
-            role: userRole // Adiciona o role ao token
+            role: userRole 
         };
         
         const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
         
-        // *** CORREÇÃO 5: Retorna o 'role' para o frontend (access.html) ***
+        // Retorna o 'role' e o 'is_available'
         res.status(200).json({ 
             success: true, 
             message: `Login bem-sucedido. Bem-vindo(a), ${user.full_name || user.email}!`,
             token: token, 
-            role: userRole, // <-- ESSENCIAL PARA O REDIRECIONAMENTO
+            role: userRole, 
             needs_setup: needsSetup, 
             setup_type: setupType,   
             user: { 
@@ -162,6 +157,35 @@ router.post('/login', async (req, res) => {
 
     } catch (error) {
         console.error('Erro no processo de login:', error);
+        res.status(500).json({ success: false, message: 'Erro interno do servidor.' });
+    }
+});
+
+
+// -------------------------------------------------------------------
+// NOVO: ROTA PARA BUSCAR DADOS DO USUÁRIO LOGADO (GET /api/user/me)
+// Resolve o 404 e SyntaxError no deliveryPanel.html
+// -------------------------------------------------------------------
+
+router.get('/user/me', protect, async (req, res) => {
+    const user_id = req.user.id;
+
+    try {
+        // Busca todos os dados relevantes, incluindo saldo e status de disponibilidade
+        const [rows] = await pool.execute(
+            'SELECT id, email, full_name, is_seller, is_admin, is_delivery_person, pending_balance, is_available FROM users WHERE id = ? LIMIT 1', 
+            [user_id]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Usuário não encontrado.' });
+        }
+        
+        // Retorna os dados, essenciais para o painel do entregador (saldo e is_available)
+        res.status(200).json({ success: true, user: rows[0] });
+
+    } catch (error) {
+        console.error('Erro ao buscar dados do usuário:', error);
         res.status(500).json({ success: false, message: 'Erro interno do servidor.' });
     }
 });
