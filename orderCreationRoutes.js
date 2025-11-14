@@ -1,4 +1,5 @@
 // ! Arquivo: orderCreationRoutes.js (Rotas 1, 2, 2.5, 3, 9, 12, 6.5, 7)
+// ! CORRIGIDO: O pool.execute na função createOrderAndCodes foi ajustado.
 
 const express = require('express');
 const router = express.Router();
@@ -23,10 +24,13 @@ const createOrderAndCodes = async (buyerId, storeId, totalAmount, initialStatus,
     const pickupCode = Math.random().toString(36).substring(2, 7).toUpperCase(); 
 
     // O código de retirada (pickupCode) agora é gerado e salvo no pedido
+    // ### CORREÇÃO APLICADA AQUI ###
+    // A variável 'deliveryCode' foi adicionada ao array de argumentos
+    // para corresponder aos 7 '?' da consulta SQL.
     const [orderResult] = await pool.execute(
         `INSERT INTO orders (buyer_id, store_id, total_amount, status, delivery_code, payment_transaction_id, delivery_pickup_code) 
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [buyerId, storeId, totalAmount, initialStatus, transactionId, pickupCode]
+        [buyerId, storeId, totalAmount, initialStatus, deliveryCode, transactionId, pickupCode]
     );
     const orderId = orderResult.insertId;
 
