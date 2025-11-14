@@ -6,19 +6,12 @@ const { protectSeller } = require('./sellerAuthMiddleware');
 const { protectDeliveryPerson } = require('./deliveryAuthMiddleware');
 const { protect } = require('./authMiddleware'); // Proteção de usuário geral
 
-// NOVO: Importa o serviço de pagamento PIX
+// NOVO: Importa o serviço de pagamento PIX (Certifique-se que o arquivo abacatePayService.js está criado)
 const { createPixQrCode } = require('./abacatePayService');
 
 // --- Constantes de Regras de Negócio ---
 const MARKETPLACE_FEE_RATE = 0.05; // 5% do Marketplace (para vendas sem contrato)
 const DELIVERY_FEE = 5.00;         // R$ 5,00 que vai para o entregador (se for do Marketplace)
-
-// deliveryRoutes.js: ROTA FUTURA PARA POLLING
-router.get('/delivery/orders/:id/status', protect, async (req, res) => {
-    // Implementar a busca no DB e, se necessário, consulta à API AbacatePay /billing/status/txid
-    // ...
-    // Retorna { success: true, status: 'Processing' } ou { success: true, status: 'Pending Payment' }
-});
 
 
 // ===================================================================
@@ -83,7 +76,7 @@ router.put('/delivery/contract/:storeId', protectSeller, async (req, res) => {
  */
 router.post('/delivery/orders', protect, async (req, res) => {
     const buyerId = req.user.id;
-    // Não é necessário 'payment_token'
+    // Recebe o total_amount e items do front-end
     const { store_id, items, total_amount } = req.body; 
 
     if (!store_id || !items || items.length === 0 || !total_amount) {
@@ -104,11 +97,12 @@ router.post('/delivery/orders', protect, async (req, res) => {
             amountInCents, 
             expiresIn, 
             description
-            // O objeto 'customer' é opcional aqui (setado como 'null' no serviço)
+            // customer: { name: req.user.full_name, ... } (Opcional)
         );
         
-        // Verifica se a geração foi bem-sucedida e se o ID da transação (txid) está presente
+        // ** Ponto de Falha Anterior: Verificação da Resposta **
         if (!pixResult.success || !pixResult.qrCodeData.txid) {
+             // Este erro será propagado se o serviço AbacatePay falhar internamente
              throw new Error('Falha ao gerar o QRCode PIX ou ID da transação ausente.');
         }
 
@@ -128,9 +122,6 @@ router.post('/delivery/orders', protect, async (req, res) => {
         // items.forEach(item => { /* INSERT INTO order_items ... */ });
 
         await pool.query('COMMIT'); // Finaliza a transação
-
-        // Notifica o vendedor
-        // (Lógica de notificação PUSH/Real-time seria implementada aqui)
 
         res.status(201).json({ 
             success: true, 
