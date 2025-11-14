@@ -13,6 +13,13 @@ const { createPixQrCode } = require('./abacatePayService');
 const MARKETPLACE_FEE_RATE = 0.05; // 5% do Marketplace (para vendas sem contrato)
 const DELIVERY_FEE = 5.00;         // R$ 5,00 que vai para o entregador (se for do Marketplace)
 
+// deliveryRoutes.js: ROTA FUTURA PARA POLLING
+router.get('/delivery/orders/:id/status', protect, async (req, res) => {
+    // Implementar a busca no DB e, se necessário, consulta à API AbacatePay /billing/status/txid
+    // ...
+    // Retorna { success: true, status: 'Processing' } ou { success: true, status: 'Pending Payment' }
+});
+
 
 // ===================================================================
 // ROTAS DE ADMINISTRAÇÃO E CONTRATO (Usado pelo Seller)
