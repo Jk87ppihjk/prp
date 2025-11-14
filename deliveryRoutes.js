@@ -1,6 +1,5 @@
 // ! Arquivo: deliveryRoutes.js (Gerenciamento de Pedidos e Entregas)
-// ! CORRIGIDO: Verificação do pixResult.qrCodeData.id (linha 118)
-// ! CORRIGIDO: SyntaxError 4a03 -> 403 (linha 345)
+// ! ATUALIZADO: Com Rota 7 (Webhook) robusta (Transações e verificação)
 
 const express = require('express');
 const router = express.Router();
@@ -23,15 +22,12 @@ const DELIVERY_FEE = 5.00;         // R$ 5,00 que vai para o entregador (se for 
 
 /**
  * Rota 1: Contratar ou Demitir Entregador (PUT /api/delivery/contract/:storeId)
- * O Vendedor usa o ID de um usuário para definir seu entregador contratado.
  */
 router.put('/delivery/contract/:storeId', protectSeller, async (req, res) => {
     const storeId = req.params.storeId;
     const sellerId = req.user.id;
-    // Pega o ID do Entregador, pode ser NULL para demissão
     const { delivery_person_id } = req.body; 
 
-    // Valida se o vendedor é dono da loja e se o ID da loja está correto
     const [storeCheck] = await pool.execute(
         'SELECT id FROM stores WHERE id = ? AND seller_id = ?',
         [storeId, sellerId]
@@ -42,7 +38,6 @@ router.put('/delivery/contract/:storeId', protectSeller, async (req, res) => {
     }
 
     try {
-        // Se houver um ID, verifica se o usuário é realmente um entregador
         if (delivery_person_id) {
             const [dpCheck] = await pool.execute(
                 'SELECT id FROM users WHERE id = ? AND is_delivery_person = TRUE',
@@ -53,7 +48,6 @@ router.put('/delivery/contract/:storeId', protectSeller, async (req, res) => {
             }
         }
         
-        // Atualiza o campo na tabela stores
         await pool.execute(
             'UPDATE stores SET contracted_delivery_person_id = ? WHERE id = ?',
             [delivery_person_id || null, storeId]
@@ -75,11 +69,9 @@ router.put('/delivery/contract/:storeId', protectSeller, async (req, res) => {
 
 /**
  * Rota 2: Cria um NOVO Pedido (POST /api/delivery/orders)
- * ATUALIZADO: Processa o pagamento via geração de QRCode PIX (AbacatePay)
  */
 router.post('/delivery/orders', protect, async (req, res) => {
     const buyerId = req.user.id;
-    // Recebe o total_amount e items do front-end
     const { store_id, items, total_amount } = req.body; 
 
     if (!store_id || !items || items.length === 0 || !total_amount) {
@@ -87,33 +79,26 @@ router.post('/delivery/orders', protect, async (req, res) => {
     }
 
     const deliveryCode = Math.random().toString(36).substring(2, 8).toUpperCase(); 
-    
-    // Converte o valor de Reais para CENTAVOS (obrigatório pelo AbacatePay)
     const amountInCents = Math.round(total_amount * 100);
-    const expiresIn = 3600; // QR Code expira em 1 hora
+    const expiresIn = 3600; // 1 hora
     const description = `Pagamento Pedido ${deliveryCode}`;
 
 
     try {
-        // 1. GERAR QR CODE PIX COM ABACATEPAY
         const pixResult = await createPixQrCode(
             amountInCents, 
             expiresIn, 
             description
-            // customer: { name: req.user.full_name, ... } (Opcional)
         );
         
-        // ** CORREÇÃO APLICADA (com base na sua sugestão) **
-        // Verifica o campo 'id' em vez de 'txid'
         if (!pixResult.success || !pixResult.qrCodeData.id) {
              throw new Error('Falha ao gerar o QRCode PIX ou ID da transação ausente.');
         }
 
         const transactionId = pixResult.qrCodeData.id; 
 
-        await pool.query('BEGIN'); // Inicia a transação
+        await pool.query('BEGIN'); 
 
-        // 2. Cria o Pedido principal (Status inicial: 'Pending Payment')
         const [orderResult] = await pool.execute(
             `INSERT INTO orders (buyer_id, store_id, total_amount, status, delivery_code, payment_transaction_id) 
              VALUES (?, ?, ?, 'Pending Payment', ?, ?)`,
@@ -121,23 +106,21 @@ router.post('/delivery/orders', protect, async (req, res) => {
         );
         const orderId = orderResult.insertId;
 
-        // 3. Insere os Itens do Pedido (simplificado: você precisará criar a tabela order_items)
-        // items.forEach(item => { /* INSERT INTO order_items ... */ });
+        // (Lógica de Inserção de Itens)
 
-        await pool.query('COMMIT'); // Finaliza a transação
+        await pool.query('COMMIT'); 
 
         res.status(201).json({ 
             success: true, 
             message: 'Pedido criado com sucesso. O pagamento deve ser feito via PIX.', 
             order_id: orderId,
-            pix_qr_code: pixResult.qrCodeData // Retorna os dados do QR Code para o frontend fazer a cobrança
+            pix_qr_code: pixResult.qrCodeData 
         });
 
     } catch (error) {
-        await pool.query('ROLLBACK'); // Desfaz a transação em caso de erro
+        await pool.query('ROLLBACK'); 
         console.error('[DELIVERY/ORDERS] Erro no fluxo do pedido:', error.message);
         
-        // Retorna 402 se for uma falha de pagamento (API do PIX) ou 500 para outros erros
         const status = error.message.includes('QRCode PIX') ? 402 : 500;
         res.status(status).json({ success: false, message: error.message || 'Erro interno ao processar pedido.' });
     }
@@ -146,7 +129,6 @@ router.post('/delivery/orders', protect, async (req, res) => {
 
 /**
  * Rota 3: Vendedor Define Método de Entrega (PUT /api/delivery/orders/:orderId/delivery-method)
- * O vendedor escolhe: Eu Entrego / Contratado / Solicitar Marketplace.
  */
 router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (req, res) => {
     const orderId = req.params.orderId;
@@ -158,7 +140,6 @@ router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (re
     }
 
     try {
-        // 1. Verifica se o vendedor é dono da loja associada ao pedido
         const [orderCheck] = await pool.execute(
             `SELECT o.store_id, s.contracted_delivery_person_id 
              FROM orders o 
@@ -174,7 +155,6 @@ router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (re
         const store = orderCheck[0];
         let deliveryPersonId = null;
 
-        // 2. Define o Entregador, se aplicável
         if (method === 'Contracted') {
             deliveryPersonId = store.contracted_delivery_person_id;
             if (!deliveryPersonId) {
@@ -182,29 +162,21 @@ router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (re
             }
         }
         
-        // 3. Atualiza o status do Pedido e o método de entrega
         await pool.execute(
             'UPDATE orders SET delivery_method = ?, status = "Delivering" WHERE id = ?',
             [method, orderId]
         );
         
-        // 4. Se for 'Contratado' ou 'Marketplace', cria o registro de entrega
         if (method !== 'Seller') {
-            
-            // a. Cria o registro inicial na tabela deliveries
             const [deliveryResult] = await pool.execute(
                 `INSERT INTO deliveries (order_id, delivery_person_id, status) VALUES (?, ?, ?)`,
                 [orderId, deliveryPersonId, deliveryPersonId ? 'Accepted' : 'Requested']
             );
 
-            // b. Se for Marketplace, NOTIFICA TODOS os entregadores disponíveis (exceto os ocupados)
             if (method === 'Marketplace') {
-                 // Esta é a lógica de notificação: na prática, é um PUSH para todos que estão `is_available = TRUE`.
-                 // O entregador com `is_available = TRUE` verá o pedido em seu painel.
                  console.log(`[LOGISTICA] NOTIFICANDO entregadores do Marketplace para Pedido ID: ${orderId}`);
             }
             
-            // c. Se Contratado, marca o entregador como OCUPADO (is_available = FALSE)
             if (method === 'Contracted' && deliveryPersonId) {
                  await pool.execute('UPDATE users SET is_available = FALSE WHERE id = ?', [deliveryPersonId]);
                  console.log(`[LOGISTICA] Entregador Contratado ID ${deliveryPersonId} está em rota.`);
@@ -226,11 +198,9 @@ router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (re
 
 /**
  * Rota 4: Entregador: Lista Pedidos Disponíveis (GET /api/delivery/available)
- * Pedidos com delivery_person_id IS NULL AND status = 'Requested' (Marketplace).
  */
 router.get('/delivery/available', protectDeliveryPerson, async (req, res) => {
     const entregadorId = req.user.id;
-    // Garante que o entregador logado não está ocupado
     if (req.user.is_available === 0) {
          return res.status(200).json({ success: true, message: 'Você está ocupado no momento.', orders: [] });
     }
@@ -259,7 +229,6 @@ router.get('/delivery/available', protectDeliveryPerson, async (req, res) => {
 
 /**
  * Rota 5: Entregador: Aceitar Pedido (PUT /api/delivery/accept/:orderId)
- * Um entregador aceita um pedido do Marketplace.
  */
 router.put('/delivery/accept/:orderId', protectDeliveryPerson, async (req, res) => {
     const orderId = req.params.orderId;
@@ -272,7 +241,6 @@ router.put('/delivery/accept/:orderId', protectDeliveryPerson, async (req, res) 
     try {
         await pool.query('BEGIN');
 
-        // 1. Atualiza a entrega com o ID do entregador e status 'Accepted'
         const [deliveryUpdate] = await pool.execute(
             `UPDATE deliveries SET delivery_person_id = ?, status = 'Accepted' 
              WHERE order_id = ? AND status = 'Requested' AND delivery_person_id IS NULL`,
@@ -284,7 +252,6 @@ router.put('/delivery/accept/:orderId', protectDeliveryPerson, async (req, res) 
             return res.status(404).json({ success: false, message: 'Pedido não disponível ou já aceito.' });
         }
 
-        // 2. Marca o entregador como OCUPADO
         await pool.execute('UPDATE users SET is_available = FALSE WHERE id = ?', [entregadorId]);
 
         await pool.query('COMMIT');
@@ -297,22 +264,20 @@ router.put('/delivery/accept/:orderId', protectDeliveryPerson, async (req, res) 
     }
 });
 
-// -------------------------------------------------------------------
+// ===================================================================
 // ROTA DE CONFIRMAÇÃO (Usado pelo Entregador ou Vendedor)
-// -------------------------------------------------------------------
+// ===================================================================
 
 /**
  * Rota 6: Confirmação de Entrega (POST /api/delivery/confirm)
- * Confirma a entrega via código (entregador/vendedor) e atualiza o saldo.
  */
 router.post('/delivery/confirm', protect, async (req, res) => {
-    const userId = req.user.id; // Pode ser Seller ou Delivery Person
+    const userId = req.user.id; 
     const { order_id, confirmation_code } = req.body;
 
     try {
         await pool.query('BEGIN');
         
-        // 1. Busca o pedido e verifica o código
         const [orderRows] = await pool.execute(
             `SELECT o.*, s.seller_id, s.contracted_delivery_person_id, d.delivery_person_id 
              FROM orders o
@@ -331,64 +296,42 @@ router.post('/delivery/confirm', protect, async (req, res) => {
         const isSeller = (order.seller_id === userId);
         const isDeliveryPerson = (order.delivery_person_id === userId);
         
-        // 2. Verifica a permissão para confirmar a entrega
         if (order.delivery_method === 'Seller' && !isSeller) {
             await pool.query('ROLLBACK');
             return res.status(403).json({ success: false, message: 'Apenas o vendedor pode confirmar a entrega própria.' });
         }
-        
-        // ***************************************************************
-        // ! CORREÇÃO DO SYNTAX ERROR APLICADA AQUI (4a03 -> 403)
-        // ***************************************************************
         if (['Contracted', 'Marketplace'].includes(order.delivery_method) && !isDeliveryPerson) {
              await pool.query('ROLLBACK');
              return res.status(403).json({ success: false, message: 'Apenas o entregador atribuído pode confirmar.' });
         }
-        // ***************************************************************
-        // ! FIM DA CORREÇÃO
-        // ***************************************************************
         
-        // 3. Processamento Financeiro e Status
         let paymentMessage = 'Pagamento em processamento.';
         
-        // ** REGRA 1: ENTREGA PRÓPRIA (Seller)**
         if (order.delivery_method === 'Seller') {
-            // Vendedor fica com 95% do total - (Total * 5% marketplace)
             const marketplaceFee = order.total_amount * MARKETPLACE_FEE_RATE;
             const sellerEarnings = order.total_amount - marketplaceFee; 
-            
-            // (Futuro: Atualizar saldo do Vendedor aqui)
             paymentMessage = `Entrega própria. O marketplace reteve R$${marketplaceFee.toFixed(2)} e R$${sellerEarnings.toFixed(2)} serão creditados ao vendedor.`;
         }
         
-        // ** REGRA 2: ENTREGA CONTRATADA (Contracted)**
         else if (order.delivery_method === 'Contracted') {
-             // O marketplace não interfere na taxa de entrega. Apenas cobra a taxa de 5% da venda.
              const marketplaceFee = order.total_amount * MARKETPLACE_FEE_RATE;
-             // (Futuro: Creditar (order.total_amount - marketplaceFee) no saldo do Vendedor)
              paymentMessage = `Entrega contratada. R$${marketplaceFee.toFixed(2)} de taxa de serviço do marketplace.`;
         }
 
-        // ** REGRA 3: ENTREGA DO MARKETPLACE (Marketplace)**
         else if (order.delivery_method === 'Marketplace' && order.delivery_person_id) {
-            // A comissão total de R$10.00 já está no preço.
-            const marketplaceFee = order.total_amount * MARKETPLACE_FEE_RATE; // 5% do Total (produto + frete)
-            const deliveredPayment = DELIVERY_FEE; // R$ 5,00 fixos para o Entregador
+            const marketplaceFee = order.total_amount * MARKETPLACE_FEE_RATE;
+            const deliveredPayment = DELIVERY_FEE; 
             
-            // 3.1. Credita R$ 5,00 no saldo pendente do Entregador
             await pool.execute(
                 'UPDATE users SET pending_balance = pending_balance + ? WHERE id = ?',
                 [deliveredPayment, order.delivery_person_id]
             );
             
-            // 3.2. Marca o entregador como DISPONÍVEL
             await pool.execute('UPDATE users SET is_available = TRUE WHERE id = ?', [order.delivery_person_id]);
             
-            // 3.3. (Futuro: Creditar o restante no saldo do Vendedor)
             paymentMessage = `Entrega Marketplace. R$${deliveredPayment.toFixed(2)} creditados ao entregador.`;
         }
         
-        // 4. Atualiza status da entrega e do pedido para finalizado
         await pool.execute('UPDATE orders SET status = "Completed" WHERE id = ?', [order_id]);
         await pool.execute('UPDATE deliveries SET status = "Delivered_Confirmed", buyer_confirmation_at = NOW() WHERE order_id = ?', [order_id]);
 
@@ -399,6 +342,76 @@ router.post('/delivery/confirm', protect, async (req, res) => {
         await pool.query('ROLLBACK');
         console.error('[DELIVERY/CONFIRM] Erro ao confirmar entrega:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao confirmar entrega.' });
+    }
+});
+
+
+// ===================================================================
+// ! INÍCIO DA ROTA DE WEBHOOK (APRIMORADA)
+// ===================================================================
+
+/**
+ * Rota 7: Webhook para notificações da AbacatePay
+ * (POST /api/abacatepay/notifications)
+ */
+router.post('/abacatepay/notifications', async (req, res) => {
+    const notification = req.body;
+    
+    console.log('🔔 [WEBHOOK ABACATEPAY] Notificação Recebida:', JSON.stringify(notification, null, 2));
+
+    try {
+        // 1. VERIFICAÇÃO DA AUTENTICIDADE (Consulte a documentação da AbacatePay)
+        // Exemplo:
+        // const isValid = verificarAssinaturaAbacatePay(req.headers['x-abacatepay-signature'], req.body);
+        // if (!isValid) {
+        //     console.warn('[WEBHOOK] Notificação com assinatura inválida.');
+        //     return res.status(400).json({ success: false, message: 'Assinatura inválida.' });
+        // }
+
+        // 2. PROCESSAMENTO DA NOTIFICAÇÃO
+        if (notification.event === 'PAYMENT_APPROVED' && notification.data) {
+            const transactionId = notification.data.id;
+            const status = notification.data.status;
+
+            if (status === 'APPROVED') {
+                // Inicia a transação
+                await pool.query('BEGIN');
+
+                try {
+                    // Encontra o pedido pelo ID da transação e atualiza o status
+                    // Garante a idempotência verificando o status 'Pending Payment'
+                    const [result] = await pool.execute(
+                        "UPDATE orders SET status = 'Processing' WHERE payment_transaction_id = ? AND status = 'Pending Payment'",
+                        [transactionId]
+                    );
+
+                    if (result.affectedRows > 0) {
+                        console.log(`[WEBHOOK] Pedido (ID Transação: ${transactionId}) atualizado para 'Processing'.`);
+                    } else {
+                        console.warn(`[WEBHOOK] Pedido (ID Transação: ${transactionId}) não encontrado ou já processado.`);
+                    }
+
+                    // Finaliza a transação
+                    await pool.query('COMMIT');
+
+                } catch (error) {
+                    // Desfaz a transação em caso de erro
+                    await pool.query('ROLLBACK');
+                    throw error; // Re-lança o erro para ser capturado no bloco catch externo
+                }
+            }
+        }
+
+        // 3. RESPOSTA AO WEBHOOK (SEMPRE 200 OK)
+        res.status(200).json({ success: true, message: 'Notificação recebida.' });
+
+    } catch (error) {
+        console.error('[WEBHOOK ABACATEPAY] Erro ao processar notificação:', error);
+        // REGISTRE O ERRO EM UM LOG (por exemplo, usando Winston ou Bunyan)
+        // logger.error('Erro ao processar notificação da AbacatePay:', error);
+
+        // SEMPRE RESPONDA 200 OK PARA EVITAR REENVIO
+        res.status(200).json({ success: true, message: 'Notificação recebida (com erro interno).' });
     }
 });
 
