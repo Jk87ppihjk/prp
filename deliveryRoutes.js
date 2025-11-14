@@ -1,4 +1,4 @@
-// ! Arquivo: deliveryRoutes.js (Versão Final UNIFICADA - PIX e Fluxo de Teste)
+// ! Arquivo: deliveryRoutes.js (Versão Final COMPLETA - Incluindo Rota de Listagem de Pedidos da Loja)
 
 const express = require('express');
 const router = express.Router();
@@ -9,11 +9,58 @@ const { protect } = require('./authMiddleware');
 
 // Importa as funções de pagamento e SIMULAÇÃO do AbacatePay
 // Assumimos que 'simulatePixPayment' foi adicionado em abacatePayService.js
-const { createPixQrCode, simulatePixPayment } = require('./abacatePayService'); 
+const { createPixQrCode, simulatePixPayment } = require('./abacatePayService');
 
 // --- Constantes de Regras de Negócio ---
 const MARKETPLACE_FEE_RATE = 0.05; // 5%
 const DELIVERY_FEE = 5.00;         // R$ 5,00
+
+
+// ===================================================================
+// ROTAS DE ADMINISTRAÇÃO E CONTRATO (Usado pelo Seller)
+// ===================================================================
+
+/**
+ * Rota 1: Contratar ou Demitir Entregador (PUT /api/delivery/contract/:storeId)
+ */
+router.put('/delivery/contract/:storeId', protectSeller, async (req, res) => {
+    const storeId = req.params.storeId;
+    const sellerId = req.user.id;
+    const { delivery_person_id } = req.body; 
+
+    const [storeCheck] = await pool.execute(
+        'SELECT id FROM stores WHERE id = ? AND seller_id = ?',
+        [storeId, sellerId]
+    );
+
+    if (storeCheck.length === 0) {
+        return res.status(403).json({ success: false, message: 'Acesso negado ou loja não encontrada.' });
+    }
+
+    try {
+        if (delivery_person_id) {
+            const [dpCheck] = await pool.execute(
+                'SELECT id FROM users WHERE id = ? AND is_delivery_person = TRUE',
+                [delivery_person_id]
+            );
+            if (dpCheck.length === 0) {
+                return res.status(400).json({ success: false, message: 'ID fornecido não corresponde a um entregador cadastrado.' });
+            }
+        }
+        
+        await pool.execute(
+            'UPDATE stores SET contracted_delivery_person_id = ? WHERE id = ?',
+            [delivery_person_id || null, storeId]
+        );
+
+        const status = delivery_person_id ? 'CONTRATADO' : 'DEMITIDO';
+        res.status(200).json({ success: true, message: `Entregador ${status} com sucesso!` });
+
+    } catch (error) {
+        console.error('[DELIVERY/CONTRACT] Erro ao gerenciar contrato:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao salvar contrato.' });
+    }
+});
 
 
 // ===================================================================
@@ -43,7 +90,7 @@ router.post('/delivery/orders', protect, async (req, res) => {
             description
         );
         
-        // CORREÇÃO: Usar 'id' e não 'txid'
+        // CORREÇÃO: Usar 'id' e não 'txid' (Assumindo que a AbacatePay usa 'id' para transações)
         if (!pixResult.success || !pixResult.qrCodeData.id) { 
              throw new Error('Falha ao gerar o QRCode PIX ou ID da transação ausente.');
         }
@@ -190,10 +237,6 @@ router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (re
                 [orderId, deliveryPersonId, deliveryPersonId ? 'Accepted' : 'Requested', method]
             );
 
-            if (method === 'Marketplace') {
-                 console.log(`[LOGISTICA] NOTIFICANDO entregadores do Marketplace para Pedido ID: ${orderId}`);
-            }
-            
             if (method === 'Contracted' && deliveryPersonId) {
                  await pool.execute('UPDATE users SET is_available = FALSE WHERE id = ?', [deliveryPersonId]);
                  console.log(`[LOGISTICA] Entregador Contratado ID ${deliveryPersonId} está em rota.`);
@@ -211,7 +254,7 @@ router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (re
 
 /**
  * Rota 9: Vendedor Despacha o Pedido (PUT /api/delivery/orders/:orderId/dispatch)
- * Usado para Self-Delivery.
+ * Usado para Self-Delivery (Eu Entrego).
  */
 router.put('/delivery/orders/:orderId/dispatch', protectSeller, async (req, res) => {
     const orderId = req.params.orderId;
@@ -255,11 +298,55 @@ router.put('/delivery/orders/:orderId/dispatch', protectSeller, async (req, res)
 
 
 // ===================================================================
-// ROTAS DE FLUXO DE ENTREGA (Entregador)
+// ROTA DE LISTAGEM (Para o Painel do Lojista)
 // ===================================================================
 
 /**
- * Rota 4: Entregador: Lista Pedidos Disponíveis
+ * Rota 10: Listar Pedidos da Loja (GET /api/delivery/orders/store/:storeId)
+ * USADA PELO painel.html
+ */
+router.get('/delivery/orders/store/:storeId', protectSeller, async (req, res) => {
+    const storeId = req.params.storeId;
+    const sellerId = req.user.id;
+
+    // 1. Verificação de Propriedade
+    const [storeCheck] = await pool.execute('SELECT seller_id FROM stores WHERE id = ? AND seller_id = ?', [storeId, sellerId]);
+    
+    if (storeCheck.length === 0) {
+        return res.status(403).json({ success: false, message: 'Acesso negado. Esta loja não pertence a você.' });
+    }
+
+    try {
+        // Junta dados de pedidos, comprador e entregador (se atribuído)
+        const [orders] = await pool.execute(
+            `SELECT 
+                o.id, o.total_amount, o.status, o.delivery_method, o.created_at, o.delivery_code,
+                u.full_name AS buyer_name,
+                dp.full_name AS delivery_person_name
+             FROM orders o
+             JOIN users u ON o.buyer_id = u.id
+             LEFT JOIN deliveries d ON o.id = d.order_id
+             LEFT JOIN users dp ON d.delivery_person_id = dp.id
+             WHERE o.store_id = ?
+             ORDER BY o.created_at DESC`,
+            [storeId]
+        );
+        
+        res.status(200).json({ success: true, orders: orders });
+
+    } catch (error) {
+        console.error('[DELIVERY/STORE_ORDERS] Erro ao listar pedidos da loja:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao carregar pedidos.' });
+    }
+});
+
+
+// ===================================================================
+// ROTAS DO ENTREGADOR (Usado pelo deliveryPanel.html)
+// ===================================================================
+
+/**
+ * Rota 4: Entregador: Lista Pedidos Disponíveis (GET /api/delivery/available)
  */
 router.get('/delivery/available', protectDeliveryPerson, async (req, res) => {
     const entregadorId = req.user.id;
@@ -290,7 +377,7 @@ router.get('/delivery/available', protectDeliveryPerson, async (req, res) => {
 });
 
 /**
- * Rota 5: Entregador: Aceitar Pedido
+ * Rota 5: Entregador: Aceitar Pedido (PUT /api/delivery/accept/:orderId)
  */
 router.put('/delivery/accept/:orderId', protectDeliveryPerson, async (req, res) => {
     const orderId = req.params.orderId;
@@ -326,14 +413,13 @@ router.put('/delivery/accept/:orderId', protectDeliveryPerson, async (req, res) 
     }
 });
 
-
-// ===================================================================
-// ROTA DE CONFIRMAÇÃO E FLUXO FINANCEIRO
-// ===================================================================
+// -------------------------------------------------------------------
+// ROTA DE CONFIRMAÇÃO (Usado pelo Entregador ou Vendedor)
+// -------------------------------------------------------------------
 
 /**
  * Rota 6: Confirmação de Entrega (POST /api/delivery/confirm)
- * Confirmação FINAL (pelo Cliente ou Entregador) e FLUXO FINANCEIRO.
+ * Confirma a entrega via código e atualiza o saldo.
  */
 router.post('/delivery/confirm', protect, async (req, res) => {
     const userId = req.user.id; 
@@ -342,6 +428,7 @@ router.post('/delivery/confirm', protect, async (req, res) => {
     try {
         await pool.query('BEGIN');
         
+        // 1. Busca o pedido e verifica o código
         const [orderRows] = await pool.execute(
             `SELECT o.*, s.seller_id, s.contracted_delivery_person_id, d.delivery_person_id 
              FROM orders o
@@ -373,7 +460,6 @@ router.post('/delivery/confirm', protect, async (req, res) => {
             const marketplaceFee = order.total_amount * MARKETPLACE_FEE_RATE;
             const sellerEarnings = order.total_amount - marketplaceFee; 
             
-            // Credita o lucro do vendedor
             await pool.execute(
                 'UPDATE users SET pending_balance = pending_balance + ? WHERE id = ?',
                 [sellerEarnings, order.seller_id]
@@ -386,7 +472,6 @@ router.post('/delivery/confirm', protect, async (req, res) => {
              const marketplaceFee = order.total_amount * MARKETPLACE_FEE_RATE;
              const sellerEarnings = order.total_amount - marketplaceFee;
              
-             // Credita o lucro do vendedor (ele repassa o frete ao contratado)
              await pool.execute(
                 'UPDATE users SET pending_balance = pending_balance + ? WHERE id = ?',
                 [sellerEarnings, order.seller_id]
@@ -542,7 +627,5 @@ router.get('/delivery/orders/:orderId/status', protect, async (req, res) => {
     }
 });
 
-
-// Rota 1 (Contrato) omitida novamente por brevidade, mas deve existir no seu arquivo final.
 
 module.exports = router;
