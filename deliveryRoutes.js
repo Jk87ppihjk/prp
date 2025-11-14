@@ -1,5 +1,5 @@
 // ! Arquivo: deliveryRoutes.js (Gerenciamento de Pedidos e Entregas)
-// ! ATUALIZADO: Com Rota 7 (Webhook) robusta (Transações e verificação)
+// ! VERSÃO COMPLETA: Inclui Rota de Simulação (6.5), Webhook (7) e Status (8)
 
 const express = require('express');
 const router = express.Router();
@@ -8,8 +8,8 @@ const { protectSeller } = require('./sellerAuthMiddleware');
 const { protectDeliveryPerson } = require('./deliveryAuthMiddleware');
 const { protect } = require('./authMiddleware'); // Proteção de usuário geral
 
-// NOVO: Importa o serviço de pagamento PIX (Certifique-se que o arquivo abacatePayService.js está criado)
-const { createPixQrCode } = require('./abacatePayService');
+// Importa as funções de criação e simulação do AbacatePay
+const { createPixQrCode, simulatePixPayment } = require('./abacatePayService');
 
 // --- Constantes de Regras de Negócio ---
 const MARKETPLACE_FEE_RATE = 0.05; // 5% do Marketplace (para vendas sem contrato)
@@ -133,7 +133,7 @@ router.post('/delivery/orders', protect, async (req, res) => {
 router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (req, res) => {
     const orderId = req.params.orderId;
     const sellerId = req.user.id;
-    const { method } = req.body; // 'Seller', 'Contracted', 'Marketplace'
+    const { method } = req.body; 
 
     if (!['Seller', 'Contracted', 'Marketplace'].includes(method)) {
         return res.status(400).json({ success: false, message: 'Método de entrega inválido.' });
@@ -158,7 +158,7 @@ router.put('/delivery/orders/:orderId/delivery-method', protectSeller, async (re
         if (method === 'Contracted') {
             deliveryPersonId = store.contracted_delivery_person_id;
             if (!deliveryPersonId) {
-                return res.status(400).json({ success: false, message: 'Loja não possui entregador contratado. Use "Eu Entrego" ou "Marketplace".' });
+                return res.status(400).json({ success: false, message: 'Loja não possui entregador contratado.' });
             }
         }
         
@@ -310,12 +310,12 @@ router.post('/delivery/confirm', protect, async (req, res) => {
         if (order.delivery_method === 'Seller') {
             const marketplaceFee = order.total_amount * MARKETPLACE_FEE_RATE;
             const sellerEarnings = order.total_amount - marketplaceFee; 
-            paymentMessage = `Entrega própria. O marketplace reteve R$${marketplaceFee.toFixed(2)} e R$${sellerEarnings.toFixed(2)} serão creditados ao vendedor.`;
+            paymentMessage = `Entrega própria. R$${marketplaceFee.toFixed(2)} retidos, R$${sellerEarnings.toFixed(2)} creditados.`;
         }
         
         else if (order.delivery_method === 'Contracted') {
              const marketplaceFee = order.total_amount * MARKETPLACE_FEE_RATE;
-             paymentMessage = `Entrega contratada. R$${marketplaceFee.toFixed(2)} de taxa de serviço do marketplace.`;
+             paymentMessage = `Entrega contratada. R$${marketplaceFee.toFixed(2)} de taxa de serviço.`;
         }
 
         else if (order.delivery_method === 'Marketplace' && order.delivery_person_id) {
@@ -347,7 +347,59 @@ router.post('/delivery/confirm', protect, async (req, res) => {
 
 
 // ===================================================================
-// ! INÍCIO DA ROTA DE WEBHOOK (APRIMORADA)
+// ROTA DE SIMULAÇÃO DE TESTE (SANDBOX)
+// ===================================================================
+
+/**
+ * Rota 6.5: Simular Pagamento (POST /api/delivery/orders/:orderId/simulate-payment)
+ * Chamada pelo botão de teste no checkout para disparar o webhook.
+ */
+router.post('/delivery/orders/:orderId/simulate-payment', protect, async (req, res) => {
+    const orderId = req.params.orderId;
+    const buyerId = req.user.id;
+
+    console.log(`[SIMULATE] Usuário ${buyerId} tentando simular pagamento para Pedido ${orderId}`);
+
+    try {
+        const [orderRows] = await pool.execute(
+            "SELECT payment_transaction_id, status FROM orders WHERE id = ? AND buyer_id = ?",
+            [orderId, buyerId]
+        );
+
+        const order = orderRows[0];
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: 'Pedido não encontrado ou não pertence a você.' });
+        }
+        
+        if (order.status !== 'Pending Payment') {
+            return res.status(400).json({ success: false, message: 'Este pedido não está mais pendente de pagamento.' });
+        }
+
+        if (!order.payment_transaction_id) {
+            return res.status(400).json({ success: false, message: 'Pedido não possui ID de transação PIX para simular.' });
+        }
+
+        const simulationResult = await simulatePixPayment(order.payment_transaction_id);
+
+        if (simulationResult.success) {
+            res.status(200).json({ 
+                success: true, 
+                message: 'Simulação enviada com sucesso. Aguardando confirmação do webhook...' 
+            });
+        } else {
+            throw new Error('Falha no serviço de simulação.');
+        }
+
+    } catch (error) {
+        console.error('[SIMULATE] Erro ao simular pagamento:', error.message);
+        res.status(500).json({ success: false, message: error.message || 'Erro interno ao simular.' });
+    }
+});
+
+
+// ===================================================================
+// ROTA DE WEBHOOK (Para Receber Notificações da AbacatePay)
 // ===================================================================
 
 /**
@@ -360,26 +412,15 @@ router.post('/abacatepay/notifications', async (req, res) => {
     console.log('🔔 [WEBHOOK ABACATEPAY] Notificação Recebida:', JSON.stringify(notification, null, 2));
 
     try {
-        // 1. VERIFICAÇÃO DA AUTENTICIDADE (Consulte a documentação da AbacatePay)
-        // Exemplo:
-        // const isValid = verificarAssinaturaAbacatePay(req.headers['x-abacatepay-signature'], req.body);
-        // if (!isValid) {
-        //     console.warn('[WEBHOOK] Notificação com assinatura inválida.');
-        //     return res.status(400).json({ success: false, message: 'Assinatura inválida.' });
-        // }
+        // (Implementar verificação de assinatura da AbacatePay aqui)
 
-        // 2. PROCESSAMENTO DA NOTIFICAÇÃO
         if (notification.event === 'PAYMENT_APPROVED' && notification.data) {
             const transactionId = notification.data.id;
             const status = notification.data.status;
 
             if (status === 'APPROVED') {
-                // Inicia a transação
                 await pool.query('BEGIN');
-
                 try {
-                    // Encontra o pedido pelo ID da transação e atualiza o status
-                    // Garante a idempotência verificando o status 'Pending Payment'
                     const [result] = await pool.execute(
                         "UPDATE orders SET status = 'Processing' WHERE payment_transaction_id = ? AND status = 'Pending Payment'",
                         [transactionId]
@@ -390,28 +431,52 @@ router.post('/abacatepay/notifications', async (req, res) => {
                     } else {
                         console.warn(`[WEBHOOK] Pedido (ID Transação: ${transactionId}) não encontrado ou já processado.`);
                     }
-
-                    // Finaliza a transação
                     await pool.query('COMMIT');
-
                 } catch (error) {
-                    // Desfaz a transação em caso de erro
                     await pool.query('ROLLBACK');
-                    throw error; // Re-lança o erro para ser capturado no bloco catch externo
+                    throw error; 
                 }
             }
         }
-
-        // 3. RESPOSTA AO WEBHOOK (SEMPRE 200 OK)
         res.status(200).json({ success: true, message: 'Notificação recebida.' });
-
     } catch (error) {
         console.error('[WEBHOOK ABACATEPAY] Erro ao processar notificação:', error);
-        // REGISTRE O ERRO EM UM LOG (por exemplo, usando Winston ou Bunyan)
-        // logger.error('Erro ao processar notificação da AbacatePay:', error);
-
-        // SEMPRE RESPONDA 200 OK PARA EVITAR REENVIO
         res.status(200).json({ success: true, message: 'Notificação recebida (com erro interno).' });
+    }
+});
+
+
+// ===================================================================
+// ! NOVA ROTA ADICIONADA (Para o Polling do checkout.html)
+// ===================================================================
+
+/**
+ * Rota 8: Checar Status do Pedido (para Polling)
+ * (GET /api/delivery/orders/:orderId/status)
+ */
+router.get('/delivery/orders/:orderId/status', protect, async (req, res) => {
+    const orderId = req.params.orderId;
+    const buyerId = req.user.id;
+
+    try {
+        // 1. Busca o status do pedido
+        const [orderRows] = await pool.execute(
+            "SELECT status FROM orders WHERE id = ? AND buyer_id = ?",
+            [orderId, buyerId]
+        );
+
+        const order = orderRows[0];
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: 'Pedido não encontrado ou não pertence a você.' });
+        }
+
+        // 2. Retorna o status atual para o polling do checkout.html
+        res.status(200).json({ success: true, status: order.status });
+
+    } catch (error) {
+        console.error('[STATUS] Erro ao checar status do pedido:', error.message);
+        res.status(500).json({ success: false, message: 'Erro interno.' });
     }
 });
 
