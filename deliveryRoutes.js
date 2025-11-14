@@ -627,5 +627,54 @@ router.get('/delivery/orders/:orderId/status', protect, async (req, res) => {
     }
 });
 
+// ! Arquivo: deliveryRoutes.js (VERSÃO FINAL: Inclui Rota 11 - Listar Pedidos do Comprador)
+
+const express = require('express');
+const router = express.Router();
+const pool = require('./config/db');
+const { protectSeller } = require('./sellerAuthMiddleware'); 
+const { protectDeliveryPerson } = require('./deliveryAuthMiddleware');
+const { protect } = require('./authMiddleware'); 
+const { createPixQrCode, simulatePixPayment } = require('./abacatePayService'); 
+
+// --- Constantes de Regras de Negócio ---
+const MARKETPLACE_FEE_RATE = 0.05; // 5%
+const DELIVERY_FEE = 5.00;         // R$ 5,00
+
+
+// ===================================================================
+// ROTA 11: LISTAR PEDIDOS DO COMPRADOR (NOVA ROTA)
+// ===================================================================
+
+/**
+ * Rota 11: Comprador lista seus pedidos (GET /api/delivery/orders/mine)
+ * USADA PELO my_orders.html
+ */
+router.get('/delivery/orders/mine', protect, async (req, res) => {
+    const buyerId = req.user.id; // User ID do token
+
+    try {
+        const [orders] = await pool.execute(
+            `SELECT 
+                o.id, o.total_amount, o.status, o.delivery_method, o.created_at, o.delivery_code,
+                s.name AS store_name,
+                dp.full_name AS delivery_person_name
+             FROM orders o
+             JOIN stores s ON o.store_id = s.id
+             LEFT JOIN deliveries d ON o.id = d.order_id
+             LEFT JOIN users dp ON d.delivery_person_id = dp.id
+             WHERE o.buyer_id = ?
+             ORDER BY o.created_at DESC`,
+            [buyerId]
+        );
+
+        res.status(200).json({ success: true, orders: orders });
+
+    } catch (error) {
+        console.error('[DELIVERY/BUYER_ORDERS] Erro ao listar pedidos do comprador:', error);
+        res.status(500).json({ success: false, message: 'Erro interno ao carregar pedidos.' });
+    }
+});
+
 
 module.exports = router;
