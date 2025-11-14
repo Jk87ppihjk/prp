@@ -1,5 +1,6 @@
 // ! Arquivo: deliveryRoutes.js (Gerenciamento de Pedidos e Entregas)
 // ! CORRIGIDO: Verificação do pixResult.qrCodeData.id (linha 118)
+// ! CORRIGIDO: SyntaxError 4a03 -> 403 (linha 345)
 
 const express = require('express');
 const router = express.Router();
@@ -102,18 +103,13 @@ router.post('/delivery/orders', protect, async (req, res) => {
             // customer: { name: req.user.full_name, ... } (Opcional)
         );
         
-        // ***************************************************************
-        // ! CORREÇÃO APLICADA AQUI (Verifica 'id' ao invés de 'txid')
-        // ***************************************************************
+        // ** CORREÇÃO APLICADA (com base na sua sugestão) **
+        // Verifica o campo 'id' em vez de 'txid'
         if (!pixResult.success || !pixResult.qrCodeData.id) {
-             // Este erro será propagado se o serviço AbacatePay falhar internamente
              throw new Error('Falha ao gerar o QRCode PIX ou ID da transação ausente.');
         }
 
         const transactionId = pixResult.qrCodeData.id; 
-        // ***************************************************************
-        // ! FIM DA CORREÇÃO
-        // ***************************************************************
 
         await pool.query('BEGIN'); // Inicia a transação
 
@@ -340,10 +336,17 @@ router.post('/delivery/confirm', protect, async (req, res) => {
             await pool.query('ROLLBACK');
             return res.status(403).json({ success: false, message: 'Apenas o vendedor pode confirmar a entrega própria.' });
         }
+        
+        // ***************************************************************
+        // ! CORREÇÃO DO SYNTAX ERROR APLICADA AQUI (4a03 -> 403)
+        // ***************************************************************
         if (['Contracted', 'Marketplace'].includes(order.delivery_method) && !isDeliveryPerson) {
              await pool.query('ROLLBACK');
-             return res.status(4a03).json({ success: false, message: 'Apenas o entregador atribuído pode confirmar.' });
+             return res.status(403).json({ success: false, message: 'Apenas o entregador atribuído pode confirmar.' });
         }
+        // ***************************************************************
+        // ! FIM DA CORREÇÃO
+        // ***************************************************************
         
         // 3. Processamento Financeiro e Status
         let paymentMessage = 'Pagamento em processamento.';
