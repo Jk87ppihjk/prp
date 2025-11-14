@@ -1,58 +1,68 @@
-// ! Arquivo: abacatePayService.js
-const axios = require('axios');
+// ! Arquivo: abacatePayService.js (Integração PIX AbacatePay)
+const axios = require('axios'); // Requerido para requisições HTTP
 
-// ! Configuração da API AbacatePay
-const ABACATEPAY_API_URL = 'https://api.abacatepay.com/v1/payments'; // URL de produção (exemplo)
+const ABACATEPAY_API_URL = 'https://api.abacatepay.com/v1/pixQrCode/create';
 const ABACATEPAY_SECRET = process.env.ABACATEPAY_SECRET;
 
 /**
- * Processa um pagamento através da API da AbacatePay.
- * * @param {number} amount - O valor total a ser cobrado.
- * @param {string} token - Token de pagamento (ex: cartão de crédito tokenizado, PIX ID).
+ * Cria um QRCode PIX através da API da AbacatePay.
+ * @param {number} amount - O valor total a ser cobrado em centavos.
+ * @param {number} expiresIn - Tempo de expiração em segundos (Ex: 3600 para 1 hora).
  * @param {string} description - Descrição do pagamento.
- * @returns {Promise<object>} - Objeto contendo o sucesso e o ID da transação.
+ * @param {object} customer - Dados do cliente (opcional).
+ * @returns {Promise<object>} - Objeto contendo o sucesso e os dados do QRCode PIX.
  */
-const createPayment = async (amount, token, description) => {
+const createPixQrCode = async (amount, expiresIn, description, customer = null) => {
     if (!ABACATEPAY_SECRET) {
         throw new Error('Serviço de pagamento indisponível: ABACATEPAY_SECRET ausente.');
     }
 
+    // Validação dos dados do cliente, se fornecidos
+    if (customer && (!customer.name || !customer.cellphone || !customer.email || !customer.taxId)) {
+        throw new Error('Dados do cliente incompletos. Se o cliente for fornecido, todos os campos (name, cellphone, email, taxId) são obrigatórios.');
+    }
+
     try {
+        const requestBody = {
+            amount: amount,
+            expiresIn: expiresIn,
+            description: description
+        };
+
+        // Adiciona os dados do cliente ao corpo da requisição, se fornecidos
+        if (customer) {
+            requestBody.customer = customer;
+        }
+
         const response = await axios.post(
-            ABACATEPAY_API_URL, 
-            {
-                amount: amount,
-                currency: 'BRL', // Moeda
-                source_token: token, 
-                description: description,
-            },
+            ABACATEPAY_API_URL,
+            requestBody,
             {
                 headers: {
-                    // Autenticação usando a chave secreta (Bearer Token é um padrão comum)
                     'Authorization': `Bearer ${ABACATEPAY_SECRET}`,
                     'Content-Type': 'application/json'
                 }
             }
         );
 
-        // Assumindo que a AbacatePay retorna um status 'succeeded' em `response.data`
-        if (response.data.status === 'succeeded') {
-            return { 
-                success: true, 
-                transaction_id: response.data.id
+        // Verifica se a requisição foi bem-sucedida (status 200 e dados presentes)
+        if (response.status === 200 && response.data.data) {
+            return {
+                success: true,
+                qrCodeData: response.data.data // Retorna os dados do QRCode PIX (inclui txid, qrCodeImage, qrCodeString)
             };
         } else {
-            throw new Error(response.data.message || 'Falha na transação de pagamento.');
+            throw new Error(response.data.error || 'Falha ao criar QRCode PIX.');
         }
 
     } catch (error) {
         // Lida com erros de rede ou de resposta da API
-        const errorDetail = error.response ? error.response.data.message : error.message;
+        const errorDetail = error.response ? error.response.data.error : error.message;
         console.error('❌ ERRO FATAL ao comunicar com AbacatePay:', errorDetail);
-        throw new Error(`Falha no pagamento: ${errorDetail}`);
+        throw new Error(`Falha ao criar QRCode PIX: ${errorDetail}`);
     }
 };
 
 module.exports = {
-    createPayment
+    createPixQrCode
 };
