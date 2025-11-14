@@ -1,4 +1,6 @@
 // ! Arquivo: deliveryRoutes.js (Gerenciamento de Pedidos e Entregas)
+// ! CORRIGIDO: Verificação do pixResult.qrCodeData.id (linha 118)
+
 const express = require('express');
 const router = express.Router();
 const pool = require('./config/db');
@@ -100,13 +102,18 @@ router.post('/delivery/orders', protect, async (req, res) => {
             // customer: { name: req.user.full_name, ... } (Opcional)
         );
         
-        // ** Ponto de Falha Anterior: Verificação da Resposta **
-        if (!pixResult.success || !pixResult.qrCodeData.txid) {
+        // ***************************************************************
+        // ! CORREÇÃO APLICADA AQUI (Verifica 'id' ao invés de 'txid')
+        // ***************************************************************
+        if (!pixResult.success || !pixResult.qrCodeData.id) {
              // Este erro será propagado se o serviço AbacatePay falhar internamente
              throw new Error('Falha ao gerar o QRCode PIX ou ID da transação ausente.');
         }
 
-        const transactionId = pixResult.qrCodeData.txid; 
+        const transactionId = pixResult.qrCodeData.id; 
+        // ***************************************************************
+        // ! FIM DA CORREÇÃO
+        // ***************************************************************
 
         await pool.query('BEGIN'); // Inicia a transação
 
@@ -335,7 +342,7 @@ router.post('/delivery/confirm', protect, async (req, res) => {
         }
         if (['Contracted', 'Marketplace'].includes(order.delivery_method) && !isDeliveryPerson) {
              await pool.query('ROLLBACK');
-             return res.status(403).json({ success: false, message: 'Apenas o entregador atribuído pode confirmar.' });
+             return res.status(4a03).json({ success: false, message: 'Apenas o entregador atribuído pode confirmar.' });
         }
         
         // 3. Processamento Financeiro e Status
