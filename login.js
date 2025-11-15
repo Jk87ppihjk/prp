@@ -1,4 +1,4 @@
-// ! Arquivo: login.js (CORRIGIDO com Rota GET /user/me)
+// ! Arquivo: login.js (CORRIGIDO - Rotas conflitantes removidas)
 
 const express = require('express');
 const router = express.Router();
@@ -86,7 +86,7 @@ router.post('/login', async (req, res) => {
     try {
         // Busca o 'is_delivery_person' e 'pending_balance' no SELECT
         const [rows] = await pool.execute(
-            'SELECT id, password_hash, email, city, full_name, is_seller, is_admin, is_delivery_person, is_available, pending_balance FROM users WHERE email = ? LIMIT 1', 
+            'SELECT id, password_hash, email, city, full_name, is_seller, is_admin, is_delivery_person, is_available, pending_balance, city_id, district_id, address_street, whatsapp_number FROM users WHERE email = ? LIMIT 1', 
             [email]
         );
 
@@ -120,8 +120,9 @@ router.post('/login', async (req, res) => {
             }
         } else { 
             // Comprador (buyer)
-            const [addressRows] = await pool.execute('SELECT id FROM addresses WHERE user_id = ? LIMIT 1', [user.id]);
-            if (addressRows.length === 0) {
+            // A checagem de endereço agora é feita direto na tabela 'users'
+            const hasAddress = user.city_id && user.district_id && user.address_street && user.whatsapp_number;
+            if (!hasAddress) {
                 needsSetup = true;
                 setupType = 'address_setup'; 
             }
@@ -163,79 +164,15 @@ router.post('/login', async (req, res) => {
 
 
 // -------------------------------------------------------------------
-// NOVO: ROTA PARA BUSCAR DADOS DO USUÁRIO LOGADO (GET /api/user/me)
-// Resolve o 404 e SyntaxError no deliveryPanel.html
+// ROTA CONFLITANTE (GET /api/user/me) REMOVIDA
+// A rota correta agora está apenas em 'userRoutes.js'
 // -------------------------------------------------------------------
-
-router.get('/user/me', protect, async (req, res) => {
-    const user_id = req.user.id;
-
-    try {
-        // Busca todos os dados relevantes, incluindo saldo e status de disponibilidade
-        const [rows] = await pool.execute(
-            'SELECT id, email, full_name, is_seller, is_admin, is_delivery_person, pending_balance, is_available FROM users WHERE id = ? LIMIT 1', 
-            [user_id]
-        );
-
-        if (rows.length === 0) {
-            return res.status(404).json({ success: false, message: 'Usuário não encontrado.' });
-        }
-        
-        // Retorna os dados, essenciais para o painel do entregador (saldo e is_available)
-        res.status(200).json({ success: true, user: rows[0] });
-
-    } catch (error) {
-        console.error('Erro ao buscar dados do usuário:', error);
-        res.status(500).json({ success: false, message: 'Erro interno do servidor.' });
-    }
-});
 
 
 // -------------------------------------------------------------------
-// ROTA PARA SALVAR ENDEREÇO INICIAL DO COMPRADOR (PUT /api/users/address)
+// ROTA CONFLITANTE (PUT /api/users/address) REMOVIDA
+// A rota correta ('/api/user/address') está em 'userRoutes.js'
 // -------------------------------------------------------------------
-
-router.put('/users/address', protect, async (req, res) => {
-    const user_id = req.user.id;
-    const { city_id, district_id } = req.body;
-
-    if (!city_id || !district_id) {
-        return res.status(400).json({ success: false, message: 'City ID e District ID são obrigatórios.' });
-    }
-
-    try {
-        const [existing] = await pool.execute(
-            'SELECT id FROM addresses WHERE user_id = ? LIMIT 1', 
-            [user_id]
-        );
-
-        if (existing.length > 0) {
-            await pool.execute(
-                'UPDATE addresses SET city_id = ?, district_id = ? WHERE user_id = ?',
-                [city_id, district_id, user_id]
-            );
-        } else {
-            await pool.execute(
-                'INSERT INTO addresses (user_id, city_id, district_id) VALUES (?, ?, ?)',
-                [user_id, city_id, district_id]
-            );
-        }
-
-        await pool.execute(
-            'UPDATE users SET city = ? WHERE id = ?',
-            [city_id, user_id]
-        );
-        
-        res.status(200).json({ success: true, message: 'Endereço principal salvo com sucesso!' });
-
-    } catch (error) {
-        console.error('Erro ao salvar endereço:', error);
-        if (error.errno === 1452) {
-            return res.status(400).json({ success: false, message: 'ID de Cidade ou Bairro inválido.' });
-        }
-        res.status(500).json({ success: false, message: 'Erro interno do servidor ao salvar endereço.' });
-    }
-});
 
 
 module.exports = router;
