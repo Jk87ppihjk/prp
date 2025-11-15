@@ -1,4 +1,3 @@
-// ! Arquivo: server.js (ATUALIZADO PARA ROTAS MODULARIZADAS)
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config(); // Carrega as variáveis de ambiente (DB_HOST, JWT_SECRET, etc)
@@ -17,6 +16,8 @@ const productRoutes = require('./productRoutes');
 const storeRoutes = require('./storeRoutes');
 const fyRoutes = require('./fyRoutes');
 const uploadRoutes = require('./uploadRoutes');
+// NOVO: Importação das rotas de usuário (onde está a rota PUT /api/user/address)
+const userRoutes = require('./userRoutes'); 
 
 // NOVO: As três partes das rotas de entrega
 const orderCreationRoutes = require('./orderCreationRoutes');
@@ -31,6 +32,8 @@ app.use('/api', productRoutes);
 app.use('/api', storeRoutes);
 app.use('/api', fyRoutes);
 app.use('/api', uploadRoutes);
+// NOVO: Registro das rotas de usuário
+app.use('/api', userRoutes);
 
 // NOVO: Registro das rotas modulares de delivery sob o prefixo /delivery
 app.use('/api/delivery', orderCreationRoutes);
