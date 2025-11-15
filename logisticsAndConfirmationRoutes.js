@@ -114,7 +114,9 @@ router.get('/current', protectDeliveryPerson, async (req, res) => {
                 u.full_name AS buyer_name, 
                 s.name AS store_name, s.address_line1 AS store_address,
                 d.delivery_time, d.pickup_time, d.packing_start_time, d.delivery_person_id,
-                CONCAT(o.delivery_address_street, ', ', o.delivery_address_number) AS delivery_address
+                d.status AS delivery_status /* CORREÇÃO: Adicionado o status da tabela deliveries */
+                /* CORREÇÃO: As colunas delivery_address_street e number não existem no schema atual. */
+                /* CONCAT(o.delivery_address_street, ', ', o.delivery_address_number) AS delivery_address */
              FROM deliveries d
              JOIN orders o ON d.order_id = o.id
              JOIN stores s ON o.store_id = s.id
@@ -136,12 +138,12 @@ router.get('/current', protectDeliveryPerson, async (req, res) => {
                      // Store address (store_address) is the pickup location
                      store_address: delivery.store_address, 
                      buyer_name: delivery.buyer_name,
-                     // Delivery address (delivery_address) is the drop-off location
-                     delivery_address: delivery.delivery_address
+                     // Delivery address: Temporariamente desativado devido a erro de schema
+                     delivery_address: '⚠️ Endereço de entrega indisponível (Erro de Schema DB)'
                  },
                  delivery_pickup_code: delivery.delivery_pickup_code, // CÓDIGO DO LOJISTA (5 dígitos)
                  delivery_code: delivery.delivery_code, // CÓDIGO DO CLIENTE (6 dígitos)
-                 status: 'Delivering',
+                 status: delivery.delivery_status, // CORREÇÃO: Usando o status real da tabela deliveries
              } });
         } else {
              // Sincronização: se ele deveria estar ocupado, mas não está em um pedido "Delivering",
