@@ -1,55 +1,69 @@
-// ! Arquivo: authMiddleware.js (Atualizado com is_delivery_person)
+// ! Arquivo: authMiddleware.js
+
 const jwt = require('jsonwebtoken');
-const pool = require('./config/db'); 
+const pool = require('./config/db'); // Assumindo que este caminho está correto
 
-const JWT_SECRET = process.env.JWT_SECRET;
-
-/**
- * Middleware para proteger rotas que exigem qualquer usuário autenticado (comprador, lojista ou entregador).
- */
-const protect = async (req, res, next) => {
+// Middleware para proteger rotas com base no token JWT (função original)
+exports.protect = async (req, res, next) => {
     let token;
 
-    if (
-        req.headers.authorization &&
-        req.headers.authorization.startsWith('Bearer')
-    ) {
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
         try {
             token = req.headers.authorization.split(' ')[1];
-            
-            // 1. Verificar e decodificar o token
-            const decoded = jwt.verify(token, JWT_SECRET);
-            
-            // 2. Buscar o usuário completo no DB, incluindo o novo role
-            const [rows] = await pool.execute(
-                'SELECT id, full_name, email, is_seller, is_admin, is_delivery_person, is_available, pending_balance FROM users WHERE id = ? LIMIT 1', 
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+            // Adicionado city_id, address_street e role para verificação posterior (para forçar o endereço)
+            const [userRows] = await pool.execute(
+                `SELECT 
+                    id, full_name, email, role, is_available, pending_balance,
+                    city_id, district_id, address_street
+                FROM users WHERE id = ?`,
                 [decoded.id]
             );
-            const user = rows[0];
 
-            if (!user) {
-                console.log(`[AUTH/GERAL] ERRO: Usuário ID ${decoded.id} não encontrado no DB.`);
+            if (userRows.length === 0) {
                 return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
             }
 
-            // 3. Se o token é válido e o usuário existe, prossegue
-            console.log(`[AUTH/GERAL] SUCESSO: Usuário ID ${user.id} autorizado para rota geral.`);
-            req.user = user; 
-            
+            req.user = userRows[0];
             next();
 
         } catch (error) {
-            const errorMessage = error.message || 'Erro na verificação do token.';
-            console.error(`[AUTH/GERAL] FALHA: ${errorMessage}. Detalhe do Erro:`, error);
-            
-            res.status(401).json({ success: false, message: 'Não autorizado, token inválido ou expirado.' });
+            console.error('Erro de autenticação:', error);
+            return res.status(401).json({ success: false, message: 'Não autorizado, token falhou.' });
         }
     }
 
     if (!token) {
-        console.log('[AUTH/GERAL] BLOQUEADO: Token não fornecido.');
-        res.status(401).json({ success: false, message: 'Não autorizado, token ausente.' });
+        return res.status(401).json({ success: false, message: 'Não autorizado, sem token.' });
     }
 };
 
-module.exports = { protect };
+/**
+ * NOVA MIDDLEWARE: Força o usuário (Comprador) a ter o endereço completo.
+ * Se o endereço for nulo, retorna 403 (Forbidden) com um código para o frontend redirecionar.
+ */
+exports.protectWithAddress = (req, res, next) => {
+    // A função 'protect' já foi executada e anexou 'req.user'
+    if (!req.user) {
+        // Isso não deve acontecer se 'protect' for chamada primeiro, mas é um bom fallback
+        return res.status(401).json({ success: false, message: 'Usuário não autenticado.' });
+    }
+
+    // A obrigatoriedade é apenas para o comprador (role 'user'). Lojista e Entregador usam outras rotas.
+    if (req.user.role === 'user') {
+        const hasAddress = req.user.city_id && req.user.district_id && req.user.address_street;
+        
+        if (!hasAddress) {
+            // Retorna um código de erro específico (403: Forbidden) para o frontend redirecionar
+            return res.status(403).json({ 
+                success: false, 
+                message: 'É obrigatório completar o cadastro de endereço.',
+                code: 'ADDRESS_REQUIRED'
+            });
+        }
+    }
+    
+    // Se tiver endereço ou não for um usuário comum, prossegue
+    next();
+};
