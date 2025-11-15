@@ -1,9 +1,8 @@
-// ! Arquivo: logisticsAndConfirmationRoutes.js (Rotas 4, 5, 6)
+// ! Arquivo: logisticsAndConfirmationRoutes.js (Rotas 4, 5, 6 - CORRIGIDO O FLUXO DE CÓDIGO)
 
 const express = require('express');
 const router = express.Router();
 const pool = require('./config/db');
-const { protectSeller } = require('./sellerAuthMiddleware'); 
 const { protectDeliveryPerson } = require('./deliveryAuthMiddleware');
 const { protect } = require('./authMiddleware'); 
 
@@ -17,7 +16,8 @@ const DELIVERY_FEE = 5.00;         // R$ 5,00
 // ===================================================================
 
 /**
- * Rota 4: Entregador: Lista Pedidos Disponíveis (GET /api/delivery/available)
+ * Rota 4: Entregador: Lista Pedidos Disponíveis
+ * (GET /api/delivery/available)
  */
 router.get('/available', protectDeliveryPerson, async (req, res) => {
     const entregadorId = req.user.id;
@@ -49,7 +49,9 @@ router.get('/available', protectDeliveryPerson, async (req, res) => {
 });
 
 /**
- * Rota 5: Entregador: Aceitar Pedido (PUT /api/delivery/accept/:orderId)
+ * Rota 5: Entregador: Aceitar Pedido
+ * (PUT /api/delivery/accept/:orderId)
+ * Retorna o CÓDIGO DE RETIRADA (delivery_pickup_code) para o Entregador.
  */
 router.put('/accept/:orderId', protectDeliveryPerson, async (req, res) => {
     const orderId = req.params.orderId;
@@ -62,7 +64,7 @@ router.put('/accept/:orderId', protectDeliveryPerson, async (req, res) => {
     try {
         await pool.query('BEGIN');
 
-        // Aceita se estiver 'Requested' e sem entregador atribuído (Marketplace)
+        // 1. Atribui o entregador ao pedido (só se estiver 'Requested' e livre)
         const [deliveryUpdate] = await pool.execute(
             `UPDATE deliveries SET delivery_person_id = ?, status = 'Accepted' 
              WHERE order_id = ? AND status = 'Requested' AND delivery_person_id IS NULL`,
@@ -74,10 +76,26 @@ router.put('/accept/:orderId', protectDeliveryPerson, async (req, res) => {
             return res.status(404).json({ success: false, message: 'Pedido não disponível ou já aceito.' });
         }
 
+        // 2. Marca o entregador como OCUPADO
         await pool.execute('UPDATE users SET is_available = FALSE WHERE id = ?', [entregadorId]);
+        
+        // 3. BUSCA o código de retirada (para dar ao entregador)
+        const [orderCode] = await pool.execute(
+            `SELECT delivery_pickup_code FROM orders WHERE id = ?`, [orderId]
+        );
 
         await pool.query('COMMIT');
-        res.status(200).json({ success: true, message: 'Pedido aceito! Apresente o código de retirada na loja.' });
+
+        const pickupCode = orderCode[0]?.delivery_pickup_code;
+        if (!pickupCode) {
+             console.error(`[DELIVERY/ACCEPT] Erro crítico: Código de retirada não encontrado para Order ${orderId}`);
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            message: 'Pedido aceito! Apresente o código de retirada na loja para o lojista confirmar a entrega.',
+            delivery_pickup_code: pickupCode // CHAVE DE SEGURANÇA RETORNADA AO ENTREGADOR
+        });
 
     } catch (error) {
         await pool.query('ROLLBACK');
@@ -92,8 +110,9 @@ router.put('/accept/:orderId', protectDeliveryPerson, async (req, res) => {
 // ===================================================================
 
 /**
- * Rota 6: Confirmação de Entrega (POST /api/delivery/confirm)
- * Confirma a entrega via código e atualiza o saldo (Lógica Financeira Completa e delivery_time).
+ * Rota 6: Confirmação de Entrega (Comprador/Entregador)
+ * (POST /api/delivery/confirm)
+ * REGISTRA delivery_time e finaliza o ciclo financeiro.
  */
 router.post('/confirm', protect, async (req, res) => {
     const userId = req.user.id; 
@@ -134,10 +153,7 @@ router.post('/confirm', protect, async (req, res) => {
             const marketplaceFee = order.total_amount * MARKETPLACE_FEE_RATE;
             const sellerEarnings = order.total_amount - marketplaceFee; 
             
-            await pool.execute(
-                'UPDATE users SET pending_balance = pending_balance + ? WHERE id = ?',
-                [sellerEarnings, order.seller_id]
-            );
+            await pool.execute('UPDATE users SET pending_balance = pending_balance + ? WHERE id = ?', [sellerEarnings, order.seller_id]);
             paymentMessage = `Entrega confirmada. R$${sellerEarnings.toFixed(2)} creditados ao vendedor.`;
         }
         else if (order.delivery_method === 'Marketplace' && order.delivery_person_id) {
@@ -145,19 +161,14 @@ router.post('/confirm', protect, async (req, res) => {
             const deliveredPayment = DELIVERY_FEE; 
             const sellerEarnings = order.total_amount - marketplaceFee - deliveredPayment; 
             
-            // 3.1. Credita no saldo do Entregador
             await pool.execute('UPDATE users SET pending_balance = pending_balance + ? WHERE id = ?', [deliveredPayment, order.delivery_person_id]);
-            
-            // 3.2. Credita o lucro do Vendedor
-             await pool.execute('UPDATE users SET pending_balance = pending_balance + ? WHERE id = ?', [sellerEarnings, order.seller_id]);
-
-            // 3.3. Marca o entregador como DISPONÍVEL
+            await pool.execute('UPDATE users SET pending_balance = pending_balance + ? WHERE id = ?', [sellerEarnings, order.seller_id]);
             await pool.execute('UPDATE users SET is_available = TRUE WHERE id = ?', [order.delivery_person_id]);
             
             paymentMessage = `Entrega Marketplace confirmada. R$${deliveredPayment.toFixed(2)} creditados ao entregador.`;
         }
         
-        // 4. Atualiza status da entrega e do pedido para finalizado, E REGISTRA O delivery_time
+        // Atualiza status da entrega e do pedido para finalizado, E REGISTRA O delivery_time
         await pool.execute('UPDATE orders SET status = "Completed" WHERE id = ?', [order_id]);
         await pool.execute(
             'UPDATE deliveries SET status = "Delivered_Confirmed", delivery_time = NOW(), buyer_confirmation_at = NOW() WHERE order_id = ?', 
