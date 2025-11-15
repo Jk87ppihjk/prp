@@ -1,4 +1,4 @@
-// ! Arquivo: trackingAndDataRoutes.js (Rotas 8, 10, 11, 13 - CORRIGIDO SEGURANÇA NA ROTA 10)
+// ! Arquivo: trackingAndDataRoutes.js (Rotas 8, 10, 11, 13 - CORRIGIDO ROTA 10)
 
 const express = require('express');
 const router = express.Router();
@@ -23,7 +23,7 @@ const DELIVERY_FEE = 5.00;         // R$ 5,00
 
 /**
  * Rota 10: Listar Pedidos da Loja (Para o Lojista)
- * AJUSTE CRUCIAL: O campo o.delivery_pickup_code FOI REMOVIDO da query.
+ * CORREÇÃO: Adicionado d.status AS delivery_status
  * O lojista deve OBRIGATORIAMENTE pedir o código ao entregador.
  */
 router.get('/orders/store/:storeId', protectSeller, async (req, res) => {
@@ -40,6 +40,7 @@ router.get('/orders/store/:storeId', protectSeller, async (req, res) => {
         const [orders] = await pool.execute(
             `SELECT 
                 o.id, o.total_amount, o.status, o.delivery_method, o.created_at, o.delivery_code, 
+                d.status AS delivery_status, /* <-- CORREÇÃO: Status da entrega (Accepted, PickedUp) */
                 -- REMOVIDO: o.delivery_pickup_code (SEGURANÇA DO HANDOVER)
                 u.full_name AS buyer_name,
                 dp.full_name AS delivery_person_name
@@ -129,7 +130,7 @@ router.get('/orders/:orderId/status', protect, async (req, res) => {
         const order = orderRows[0];
 
         if (!order) {
-            return res.status(404).json({ success: false, message: 'Pedido não encontrado ou não pertence a você.' });
+            return res.status(440).json({ success: false, message: 'Pedido não encontrado ou não pertence a você.' });
         }
 
         const trackingMessage = getBuyerTrackingMessage(order, order);
