@@ -112,11 +112,13 @@ router.get('/current', protectDeliveryPerson, async (req, res) => {
             `SELECT 
                 o.id, o.total_amount, o.delivery_code, o.delivery_pickup_code,
                 u.full_name AS buyer_name, 
-                s.name AS store_name, s.address_line1 AS store_address,
+                s.name AS store_name, CONCAT(s.address_street, ', ', s.address_number) AS store_address, /* CORREÇÃO: Usa s.address_street e s.address_number */
                 d.delivery_time, d.pickup_time, d.packing_start_time, d.delivery_person_id,
-                d.status AS delivery_status /* CORREÇÃO: Adicionado o status da tabela deliveries */
-                /* CORREÇÃO: As colunas delivery_address_street e number não existem no schema atual. */
-                /* CONCAT(o.delivery_address_street, ', ', o.delivery_address_number) AS delivery_address */
+                d.status AS delivery_status, /* Status da tabela deliveries */
+                CONCAT(
+                    o.delivery_address_street, ', ', o.delivery_address_number, 
+                    ' (Ref: ', COALESCE(o.delivery_address_nearby, 'N/A'), ')'
+                ) AS delivery_address /* CORREÇÃO: Usa campos do pedido e inclui referência */
              FROM deliveries d
              JOIN orders o ON d.order_id = o.id
              JOIN stores s ON o.store_id = s.id
@@ -138,8 +140,8 @@ router.get('/current', protectDeliveryPerson, async (req, res) => {
                      // Store address (store_address) is the pickup location
                      store_address: delivery.store_address, 
                      buyer_name: delivery.buyer_name,
-                     // Delivery address: Temporariamente desativado devido a erro de schema
-                     delivery_address: '⚠️ Endereço de entrega indisponível (Erro de Schema DB)'
+                     // Delivery address: AGORA FUNCIONA
+                     delivery_address: delivery.delivery_address 
                  },
                  delivery_pickup_code: delivery.delivery_pickup_code, // CÓDIGO DO LOJISTA (5 dígitos)
                  delivery_code: delivery.delivery_code, // CÓDIGO DO CLIENTE (6 dígitos)
@@ -155,6 +157,10 @@ router.get('/current', protectDeliveryPerson, async (req, res) => {
         }
     } catch (error) {
         console.error('[DELIVERY/CURRENT] Erro ao buscar entrega atual:', error);
+        // Garante que a mensagem de erro de coluna seja clara
+        if (error.code === 'ER_BAD_FIELD_ERROR') {
+             return res.status(500).json({ success: false, message: 'Erro interno: Colunas do Banco de Dados faltando. Execute o script de migração de endereço.' });
+        }
         res.status(500).json({ success: false, message: 'Erro interno ao buscar entrega atual.' });
     }
 });
