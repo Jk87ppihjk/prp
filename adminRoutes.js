@@ -1,18 +1,11 @@
-// ! Arquivo: adminRoutes.js (COM ROTA PÚBLICA DE BAIRROS)
+// ! Arquivo: adminRoutes.js (CORRIGIDO: Utiliza o pool de conexão compartilhado)
 const express = require('express');
 const router = express.Router();
-const mysql = require('mysql2/promise');
+// const mysql = require('mysql2/promise'); // REMOVIDO
 const { protectAdmin } = require('./adminAuthMiddleware'); 
 
-// ! Configuração do Banco de Dados
-const dbConfig = { 
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    connectionLimit: 10,
-}; 
-const pool = mysql.createPool(dbConfig);
+// ! CORREÇÃO: Importa o pool compartilhado do config/db
+const pool = require('./config/db'); 
 
 // -------------------------------------------------------------------
 // ROTAS PÚBLICAS (Acessíveis por qualquer cliente/lojista)
