@@ -1,38 +1,34 @@
-// ! Arquivo: userRoutes.js (Rotas para o Comprador/Usuário)
+// ! Arquivo: userRoutes.js (Rotas para o Comprador/Usuário - COM LOGS)
 
 const express = require('express');
 const router = express.Router();
 const pool = require('./config/db');
-const { protect } = require('./authMiddleware'); // Importa a middleware de autenticação
+const { protect } = require('./authMiddleware'); // Importa o 'protect' JÁ CORRIGIDO
 
 /**
  * Rota GET /api/user/me
- * Objetivo: Permitir que o frontend (ex: checkout.html) busque os dados
- * completos do usuário logado, incluindo o endereço cadastrado.
+ * (Usada pelo checkout.html)
  */
 router.get('/user/me', protect, async (req, res) => {
-    // O middleware 'protect' já executou a busca no banco de dados 
-    // e anexou os dados do usuário (incluindo o endereço) em 'req.user'.
+    
+    // LOG: Mostra os dados que o 'protect' (corrigido) forneceu.
+    console.log(`[USER/ME - GET] Rota acessada. Retornando dados do req.user (fornecido pelo protect):`, JSON.stringify(req.user, null, 2));
     
     if (!req.user) {
-        // Esta verificação é uma segurança extra, embora 'protect' já trate isso.
+        console.log("[USER/ME - GET] ERRO: req.user não foi encontrado, mesmo após o 'protect'.");
         return res.status(404).json({ success: false, message: 'Usuário não encontrado na sessão.' });
     }
     
-    // Retorna o objeto 'user' completo que o 'protect' buscou
     res.status(200).json({ success: true, user: req.user });
 });
 
 /**
  * Rota PUT /api/user/address
- * Objetivo: Permitir que o usuário (comprador) salve ou atualize 
- * seu endereço segmentado (usado por address_setup.html).
+ * (Usada pelo address_setup.html)
  */
 router.put('/user/address', protect, async (req, res) => {
-    // ID do usuário logado (garantido pelo middleware 'protect')
     const userId = req.user.id; 
     
-    // Campos de endereço segmentado e WhatsApp vindos do frontend
     const { 
         city_id, 
         district_id, 
@@ -42,13 +38,15 @@ router.put('/user/address', protect, async (req, res) => {
         whatsapp_number 
     } = req.body;
 
-    // 1. Validação: Apenas 'address_nearby' é opcional.
+    // LOG: Mostra exatamente o que o frontend (address_setup.html) enviou.
+    console.log(`[USER/ADDRESS - PUT] Usuário ${userId} está salvando o endereço. PAYLOAD RECEBIDO:`, JSON.stringify(req.body, null, 2));
+
     if (!city_id || !district_id || !address_street || !address_number || !whatsapp_number) {
+        console.log("[USER/ADDRESS - PUT] ERRO: Validação falhou. Campos obrigatórios ausentes.");
         return res.status(400).json({ success: false, message: 'Todos os campos de endereço, exceto "Próximo a", e o WhatsApp são obrigatórios.' });
     }
 
     try {
-        // 2. Atualiza a tabela 'users' com os novos dados de endereço
         const [result] = await pool.execute(
             `UPDATE users SET 
                 city_id = ?, 
@@ -69,19 +67,17 @@ router.put('/user/address', protect, async (req, res) => {
             ]
         );
 
+        // LOG: Confirma que o banco de dados foi realmente alterado.
+        console.log(`[USER/ADDRESS - PUT] SUCESSO: Banco de dados atualizado. ${result.affectedRows} linha(s) afetada(s).`);
+
         if (result.affectedRows === 0) {
-            // Isso só deve acontecer se o ID do usuário não existir
             return res.status(404).json({ success: false, message: 'Usuário não encontrado.' });
         }
 
         res.status(200).json({ success: true, message: 'Endereço e WhatsApp atualizados com sucesso.' });
 
     } catch (error) {
-        console.error('[USER/ADDRESS] Erro ao atualizar endereço do usuário:', error);
-        // Erro de FK (cidade ou bairro não existe)
-        if (error.errno === 1452) { 
-             return res.status(400).json({ success: false, message: 'Cidade ou bairro inválido. Por favor, selecione um valor existente.' });
-        }
+        console.error('[USER/ADDRESS - PUT] ERRO FATAL no DB:', error);
         res.status(500).json({ success: false, message: 'Erro interno ao salvar endereço.' });
     }
 });
