@@ -1,4 +1,4 @@
-// ! Arquivo: storeRoutes.js (CORREÇÃO FINAL DE CATEGORIAS E ORDEM)
+// ! Arquivo: storeRoutes.js (CORRIGIDO: Endereço Segmentado e WhatsApp)
 const express = require('express');
 const router = express.Router();
 const { protectSeller } = require('./sellerAuthMiddleware'); 
@@ -9,17 +9,22 @@ const pool = require('./config/db'); // Importa o pool central
 // -------------------------------------------------------------------
 
 /**
- * 1. Rota para BUSCAR a loja do lojista logado (GET /api/stores/mine) - Ordem Correta
+ * 1. Rota para BUSCAR a loja do lojista logado (GET /api/stores/mine) - Com Endereço Segmentado
  */
 router.get('/stores/mine', protectSeller, async (req, res) => {
     const seller_id = req.user.id;
     
     try {
-        // Inclui LEFT JOIN para pegar o nome da categoria atual
+        // Inclui LEFT JOIN para pegar os nomes de categoria, cidade e bairro
         const [rows] = await pool.execute(
-            `SELECT s.*, c.name AS category_name
+            `SELECT s.*, 
+                c.name AS category_name,
+                city.name AS city_name,
+                d.name AS district_name
              FROM stores s
              LEFT JOIN categories c ON s.category_id = c.id
+             LEFT JOIN cities city ON s.city_id = city.id
+             LEFT JOIN districts d ON s.district_id = d.id
              WHERE s.seller_id = ? LIMIT 1`,
             [seller_id]
         );
@@ -39,15 +44,19 @@ router.get('/stores/mine', protectSeller, async (req, res) => {
 });
 
 /**
- * 2. Rota para CRIAR uma nova loja (POST /api/stores) - Inclui category_id
+ * 2. Rota para CRIAR uma nova loja (POST /api/stores) - Com Endereço Segmentado
  */
 router.post('/stores', protectSeller, async (req, res) => {
     const seller_id = req.user.id;
-    // Campo category_id adicionado aqui:
-    const { name, bio, address_line1, logo_url, banner_url, category_id } = req.body; 
+    const { 
+        name, bio, logo_url, banner_url, category_id,
+        city_id, district_id, address_street, address_number, 
+        address_nearby, whatsapp_number 
+    } = req.body; 
 
-    if (!name || !address_line1) {
-        return res.status(400).json({ success: false, message: 'Nome e Endereço são obrigatórios para a loja.' });
+    // Validação de campos obrigatórios
+    if (!name || !category_id || !city_id || !district_id || !address_street || !address_number || !whatsapp_number) {
+        return res.status(400).json({ success: false, message: 'Nome, Categoria, Endereço Completo (Rua, Número, Cidade, Bairro) e WhatsApp são obrigatórios.' });
     }
 
     try {
@@ -57,9 +66,15 @@ router.post('/stores', protectSeller, async (req, res) => {
         }
 
         const [result] = await pool.execute(
-            `INSERT INTO stores (seller_id, name, bio, address_line1, logo_url, banner_url, category_id) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [seller_id, name, bio || null, address_line1, logo_url || null, banner_url || null, category_id || null]
+            `INSERT INTO stores 
+                (seller_id, name, bio, logo_url, banner_url, category_id, 
+                 city_id, district_id, address_street, address_number, address_nearby, whatsapp_number) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                seller_id, name, bio || null, logo_url || null, banner_url || null, category_id,
+                city_id, district_id, address_street, address_number, 
+                address_nearby || null, whatsapp_number
+            ]
         );
         
         res.status(201).json({ success: true, message: 'Loja criada com sucesso. Bem-vindo!', store_id: result.insertId });
@@ -71,20 +86,36 @@ router.post('/stores', protectSeller, async (req, res) => {
 });
 
 /**
- * 3. Rota para ATUALIZAR a loja (PUT /api/stores/:id) - Inclui category_id
+ * 3. Rota para ATUALIZAR a loja (PUT /api/stores/:id) - Com Endereço Segmentado
  */
 router.put('/stores/:id', protectSeller, async (req, res) => {
     const storeId = req.params.id;
     const seller_id = req.user.id;
-    // Campo category_id adicionado aqui:
-    const { name, bio, address_line1, logo_url, banner_url, category_id } = req.body; 
+    
+    const { 
+        name, bio, logo_url, banner_url, category_id,
+        city_id, district_id, address_street, address_number, 
+        address_nearby, whatsapp_number 
+    } = req.body; 
+
+    // Validação de campos obrigatórios
+    if (!name || !category_id || !city_id || !district_id || !address_street || !address_number || !whatsapp_number) {
+        return res.status(400).json({ success: false, message: 'Nome, Categoria, Endereço Completo (Rua, Número, Cidade, Bairro) e WhatsApp são obrigatórios.' });
+    }
 
     try {
         const [result] = await pool.execute(
             `UPDATE stores SET 
-             name = ?, bio = ?, address_line1 = ?, logo_url = ?, banner_url = ?, category_id = ? 
+                name = ?, bio = ?, logo_url = ?, banner_url = ?, category_id = ?, 
+                city_id = ?, district_id = ?, address_street = ?, address_number = ?, 
+                address_nearby = ?, whatsapp_number = ?
              WHERE id = ? AND seller_id = ?`,
-            [name, bio || null, address_line1, logo_url || null, banner_url || null, category_id || null, storeId, seller_id] 
+            [
+                name, bio || null, logo_url || null, banner_url || null, category_id,
+                city_id, district_id, address_street, address_number, 
+                address_nearby || null, whatsapp_number,
+                storeId, seller_id
+            ]
         );
 
         if (result.affectedRows === 0) {
@@ -104,16 +135,21 @@ router.put('/stores/:id', protectSeller, async (req, res) => {
 // ROTA PÚBLICA (para store_profile.html)
 // -------------------------------------------------------------------
 /**
- * 4. Rota para LER o perfil da loja (GET /api/stores/:id) - PÚBLICA (Ordem Correta)
+ * 4. Rota para LER o perfil da loja (GET /api/stores/:id) - PÚBLICA (Com Endereço Segmentado)
  */
 router.get('/stores/:id', async (req, res) => {
     const storeId = req.params.id;
 
     try {
         const [storeRows] = await pool.execute(
-            `SELECT s.*, c.name AS category_name
+            `SELECT s.*, 
+                c.name AS category_name,
+                city.name AS city_name,
+                d.name AS district_name
              FROM stores s
              LEFT JOIN categories c ON s.category_id = c.id
+             LEFT JOIN cities city ON s.city_id = city.id
+             LEFT JOIN districts d ON s.district_id = d.id
              WHERE s.id = ? LIMIT 1`,
             [storeId]
         );
