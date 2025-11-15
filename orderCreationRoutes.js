@@ -1,47 +1,59 @@
-// ! Arquivo: orderCreationRoutes.js (Rotas 1, 2, 2.5, 3, 9, 12, 6.5, 7)
-// ! CORRIGIDO: O pool.execute na função createOrderAndCodes foi ajustado.
+// ! Arquivo: orderCreationRoutes.js (CORRIGIDO: Endereço Segmentado e Obrigatoriedade)
 
 const express = require('express');
 const router = express.Router();
 const pool = require('./config/db');
 const { protectSeller } = require('./sellerAuthMiddleware'); 
 const { protectDeliveryPerson } = require('./deliveryAuthMiddleware');
-const { protect } = require('./authMiddleware'); 
+// 1. IMPORTAÇÃO: Adicionado 'protectWithAddress'
+const { protect, protectWithAddress } = require('./authMiddleware'); 
 
 // Assume-se que 'createPixQrCode' e 'simulatePixPayment' existem
 const { createPixQrCode, simulatePixPayment } = require('./abacatePayService'); 
 
 // --- Constantes Comuns ---
 const MARKETPLACE_FEE_RATE = 0.05; // 5%
-const DELIVERY_FEE = 5.00;         // R$ 5,00
+const DELIVERY_FEE = 5.00; // R$ 5,00
 
 // ===================================================================
 // FUNÇÃO AUXILIAR DE CRIAÇÃO (Usada por Rota 2 e 2.5)
 // ===================================================================
 
-const createOrderAndCodes = async (buyerId, storeId, totalAmount, initialStatus, transactionId, items) => {
+/**
+ * 2. FUNÇÃO ATUALIZADA: Recebe 'addressSnapshot' para salvar no pedido.
+ */
+const createOrderAndCodes = async (buyerId, storeId, totalAmount, initialStatus, transactionId, items, addressSnapshot) => {
     const deliveryCode = Math.random().toString(36).substring(2, 8).toUpperCase(); 
     const pickupCode = Math.random().toString(36).substring(2, 7).toUpperCase(); 
 
-    // O código de retirada (pickupCode) agora é gerado e salvo no pedido
-    // ### CORREÇÃO APLICADA AQUI ###
-    // A variável 'deliveryCode' foi adicionada ao array de argumentos
-    // para corresponder aos 7 '?' da consulta SQL.
+    // 3. SQL ATUALIZADO: Insere o endereço segmentado
     const [orderResult] = await pool.execute(
-        `INSERT INTO orders (buyer_id, store_id, total_amount, status, delivery_code, payment_transaction_id, delivery_pickup_code) 
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [buyerId, storeId, totalAmount, initialStatus, deliveryCode, transactionId, pickupCode]
+        `INSERT INTO orders (
+            buyer_id, store_id, total_amount, status, delivery_code, payment_transaction_id, delivery_pickup_code,
+            delivery_city_id, delivery_district_id, delivery_address_street, 
+            delivery_address_number, delivery_address_nearby, buyer_whatsapp_number
+         ) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+            buyerId, storeId, totalAmount, initialStatus, deliveryCode, transactionId, pickupCode,
+            addressSnapshot.city_id, // <-- Novo
+            addressSnapshot.district_id, // <-- Novo
+            addressSnapshot.address_street, // <-- Novo
+            addressSnapshot.address_number, // <-- Novo
+            addressSnapshot.address_nearby, // <-- Novo
+            addressSnapshot.whatsapp_number // <-- Novo
+        ]
     );
     const orderId = orderResult.insertId;
 
     // Lógica de diminuição de estoque
     for (const item of items) {
-         const [stockUpdate] = await pool.execute(
+        const [stockUpdate] = await pool.execute(
             'UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND stock_quantity >= ?',
             [item.qty, item.id, item.qty]
         );
         if (stockUpdate.affectedRows === 0) {
-             throw new Error(`Estoque insuficiente para o item ID ${item.id}.`);
+            throw new Error(`Estoque insuficiente para o item ID ${item.id}.`);
         }
     }
     
@@ -56,6 +68,7 @@ const createOrderAndCodes = async (buyerId, storeId, totalAmount, initialStatus,
  * Rota 1: Contratar ou Demitir Entregador (PUT /api/delivery/contract/:storeId)
  */
 router.put('/contract/:storeId', protectSeller, async (req, res) => {
+    // ... (Código original sem alteração) ...
     const storeId = req.params.storeId;
     const sellerId = req.user.id;
     const { delivery_person_id } = req.body; 
@@ -101,10 +114,23 @@ router.put('/contract/:storeId', protectSeller, async (req, res) => {
 
 /**
  * Rota 2: Cria um NOVO Pedido (POST /api/delivery/orders) - FLUXO PIX REAL
+ * 4. MIDDLEWARE ATUALIZADA: [protect, protectWithAddress]
  */
-router.post('/orders', protect, async (req, res) => {
+router.post('/orders', [protect, protectWithAddress], async (req, res) => {
     const buyerId = req.user.id;
     const { store_id, items, total_amount } = req.body; 
+
+    // 5. AQUISIÇÃO: O endereço vem do req.user (obrigatório pelo middleware)
+    const { 
+        city_id, district_id, address_street, 
+        address_number, address_nearby, whatsapp_number 
+    } = req.user;
+    
+    // Agrupa o endereço para passar para a função auxiliar
+    const addressSnapshot = { 
+        city_id, district_id, address_street, 
+        address_number, address_nearby, whatsapp_number 
+    };
 
     if (!store_id || !items || items.length === 0 || !total_amount) {
         return res.status(400).json({ success: false, message: 'Dados do pedido incompletos.' });
@@ -116,12 +142,13 @@ router.post('/orders', protect, async (req, res) => {
     try {
         const pixResult = await createPixQrCode(amountInCents, expiresIn, 'Pagamento');
         if (!pixResult.success || !pixResult.qrCodeData.id) { 
-             throw new Error('Falha ao gerar o QRCode PIX ou ID da transação ausente.');
+            throw new Error('Falha ao gerar o QRCode PIX ou ID da transação ausente.');
         }
 
         await pool.query('BEGIN'); 
+        // 6. ATUALIZAÇÃO: Passa o 'addressSnapshot' para a função
         const { orderId } = await createOrderAndCodes(
-            buyerId, store_id, total_amount, 'Pending Payment', pixResult.qrCodeData.id, items
+            buyerId, store_id, total_amount, 'Pending Payment', pixResult.qrCodeData.id, items, addressSnapshot
         );
         await pool.query('COMMIT'); 
 
@@ -143,10 +170,22 @@ router.post('/orders', protect, async (req, res) => {
 
 /**
  * Rota 2.5: Cria um NOVO Pedido - FLUXO SIMULADO (POST /api/delivery/orders/simulate-purchase)
+ * 4. MIDDLEWARE ATUALIZADA: [protect, protectWithAddress]
  */
-router.post('/orders/simulate-purchase', protect, async (req, res) => {
+router.post('/orders/simulate-purchase', [protect, protectWithAddress], async (req, res) => {
     const buyerId = req.user.id;
     const { store_id, items, total_amount } = req.body; 
+
+    // 5. AQUISIÇÃO: O endereço vem do req.user
+    const { 
+        city_id, district_id, address_street, 
+        address_number, address_nearby, whatsapp_number 
+    } = req.user;
+    
+    const addressSnapshot = { 
+        city_id, district_id, address_street, 
+        address_number, address_nearby, whatsapp_number 
+    };
 
     if (!store_id || !items || items.length === 0 || !total_amount) {
         return res.status(400).json({ success: false, message: 'Dados do pedido incompletos.' });
@@ -154,8 +193,9 @@ router.post('/orders/simulate-purchase', protect, async (req, res) => {
 
     try {
         await pool.query('BEGIN'); 
+        // 6. ATUALIZAÇÃO: Passa o 'addressSnapshot' para a função
         const { orderId } = await createOrderAndCodes(
-            buyerId, store_id, total_amount, 'Processing', 'SIMULATED_PURCHASE', items
+            buyerId, store_id, total_amount, 'Processing', 'SIMULATED_PURCHASE', items, addressSnapshot
         );
         await pool.query('COMMIT'); 
 
@@ -180,9 +220,9 @@ router.post('/orders/simulate-purchase', protect, async (req, res) => {
 
 /**
  * Rota 3: Vendedor Define Método de Entrega (PUT /api/delivery/orders/:orderId/delivery-method)
- * Usada para definir MarketPlace/Contratado
  */
 router.put('/orders/:orderId/delivery-method', protectSeller, async (req, res) => {
+    // ... (Código original sem alteração) ...
     const orderId = req.params.orderId;
     const sellerId = req.user.id;
     const { method } = req.body; // 'Contracted', 'Marketplace'
@@ -244,9 +284,9 @@ router.put('/orders/:orderId/delivery-method', protectSeller, async (req, res) =
 
 /**
  * Rota 9: Vendedor Despacha o Pedido (PUT /api/delivery/orders/:orderId/dispatch)
- * Usado para Self-Delivery (Eu Entrego).
  */
 router.put('/orders/:orderId/dispatch', protectSeller, async (req, res) => {
+    // ... (Código original sem alteração) ...
     const orderId = req.params.orderId;
     const sellerId = req.user.id;
 
@@ -273,7 +313,6 @@ router.put('/orders/:orderId/dispatch', protectSeller, async (req, res) => {
         );
         
         // 3. Cria o registro de entrega E REGISTRA O TEMPO DE EMBALAGEM (packing_start_time)
-        // Self-Delivery: O lojista está despachando, então o tempo de embalagem é agora.
         await pool.execute(
             `INSERT INTO deliveries (order_id, delivery_person_id, status, delivery_method, packing_start_time) 
              VALUES (?, NULL, 'Accepted', 'Seller', NOW())`, 
@@ -293,10 +332,9 @@ router.put('/orders/:orderId/dispatch', protectSeller, async (req, res) => {
 
 /**
  * Rota 12: Vendedor Confirma Retirada do Pedido (PUT /api/delivery/orders/:orderId/confirm-pickup)
- * Usado pelo Lojista para handover para Entregador (Contratado/Marketplace)
- * O Lojista usa o pickup_code que o Entregador apresenta.
  */
 router.put('/orders/:orderId/confirm-pickup', protectSeller, async (req, res) => {
+    // ... (Código original sem alteração) ...
     const orderId = req.params.orderId;
     const sellerId = req.user.id;
     const { pickup_code } = req.body; 
@@ -327,7 +365,6 @@ router.put('/orders/:orderId/confirm-pickup', protectSeller, async (req, res) =>
         }
 
         // 3. Registra os tempos de Embalagem (packing_start_time) e Retirada (pickup_time)
-        // Assumimos que o Lojista embala na hora da entrega para o entregador.
         await pool.execute(
             `UPDATE deliveries SET 
              status = 'PickedUp', 
@@ -351,9 +388,9 @@ router.put('/orders/:orderId/confirm-pickup', protectSeller, async (req, res) =>
 
 /**
  * Rota 6.5: Simular Pagamento (POST /api/delivery/orders/:orderId/simulate-payment)
- * Mantida aqui por lidar com o fluxo de pagamento/criação
  */
 router.post('/orders/:orderId/simulate-payment', protect, async (req, res) => {
+    // ... (Código original sem alteração) ...
     const orderId = req.params.orderId;
     const buyerId = req.user.id;
 
@@ -364,7 +401,7 @@ router.post('/orders/:orderId/simulate-payment', protect, async (req, res) => {
         );
 
         const order = orderRows[0];
-        if (!order) { return res.status(404).json({ success: false, message: 'Pedido não encontrado ou não pertence a você.' }); }
+        if (!order) { return res.status(4404).json({ success: false, message: 'Pedido não encontrado ou não pertence a você.' }); }
         if (order.status !== 'Pending Payment') { return res.status(400).json({ success: false, message: 'Este pedido não está mais pendente de pagamento.' }); }
         if (!order.payment_transaction_id) { return res.status(400).json({ success: false, message: 'Pedido não possui ID de transação PIX para simular.' }); }
 
@@ -385,9 +422,9 @@ router.post('/orders/:orderId/simulate-payment', protect, async (req, res) => {
 
 /**
  * Rota 7: Webhook para notificações da AbacatePay (POST /api/abacatepay/notifications)
- * Mantida aqui por tratar da confirmação de pagamento.
  */
 router.post('/abacatepay/notifications', async (req, res) => {
+    // ... (Código original sem alteração) ...
     const notification = req.body;
     
     console.log('🔔 [WEBHOOK ABACATEPAY] Notificação Recebida:', JSON.stringify(notification, null, 2));
