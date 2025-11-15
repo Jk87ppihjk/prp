@@ -1,4 +1,4 @@
-// ! Arquivo: logisticsAndConfirmationRoutes.js (Rotas 4, 5, 6, 11)
+// ! Arquivo: logisticsAndConfirmationRoutes.js (CORRIGIDO: Segurança do delivery_code)
 
 const express = require('express');
 const router = express.Router();
@@ -97,7 +97,7 @@ router.put('/accept/:orderId', protectDeliveryPerson, async (req, res) => {
 
 /**
  * Rota 11: Entregador: Ver Entrega Atual (GET /api/delivery/current)
- * Retorna os detalhes do pedido ativo que o entregador aceitou.
+ * CORREÇÃO: Removida a seleção do delivery_code (código final do cliente).
  */
 router.get('/current', protectDeliveryPerson, async (req, res) => {
     const entregadorId = req.user.id;
@@ -110,15 +110,15 @@ router.get('/current', protectDeliveryPerson, async (req, res) => {
     try {
         const [deliveryRows] = await pool.execute(
             `SELECT 
-                o.id, o.total_amount, o.delivery_code, o.delivery_pickup_code,
+                o.id, o.total_amount, o.delivery_pickup_code, /* o.delivery_code REMOVIDO */
                 u.full_name AS buyer_name, 
-                s.name AS store_name, CONCAT(s.address_street, ', ', s.address_number) AS store_address, /* CORREÇÃO: Usa s.address_street e s.address_number */
+                s.name AS store_name, CONCAT(s.address_street, ', ', s.address_number) AS store_address, /* Endereço da Loja CORRIGIDO */
                 d.delivery_time, d.pickup_time, d.packing_start_time, d.delivery_person_id,
                 d.status AS delivery_status, /* Status da tabela deliveries */
                 CONCAT(
                     o.delivery_address_street, ', ', o.delivery_address_number, 
                     ' (Ref: ', COALESCE(o.delivery_address_nearby, 'N/A'), ')'
-                ) AS delivery_address /* CORREÇÃO: Usa campos do pedido e inclui referência */
+                ) AS delivery_address /* Endereço de Entrega CORRIGIDO */
              FROM deliveries d
              JOIN orders o ON d.order_id = o.id
              JOIN stores s ON o.store_id = s.id
@@ -137,15 +137,13 @@ router.get('/current', protectDeliveryPerson, async (req, res) => {
                      id: delivery.id, 
                      total_amount: delivery.total_amount, 
                      store_name: delivery.store_name,
-                     // Store address (store_address) is the pickup location
                      store_address: delivery.store_address, 
                      buyer_name: delivery.buyer_name,
-                     // Delivery address: AGORA FUNCIONA
                      delivery_address: delivery.delivery_address 
                  },
-                 delivery_pickup_code: delivery.delivery_pickup_code, // CÓDIGO DO LOJISTA (5 dígitos)
-                 delivery_code: delivery.delivery_code, // CÓDIGO DO CLIENTE (6 dígitos)
-                 status: delivery.delivery_status, // CORREÇÃO: Usando o status real da tabela deliveries
+                 delivery_pickup_code: delivery.delivery_pickup_code, // CÓDIGO DE RETIRADA (Lojista)
+                 // delivery_code: REMOVIDO DAQUI
+                 status: delivery.delivery_status, 
              } });
         } else {
              // Sincronização: se ele deveria estar ocupado, mas não está em um pedido "Delivering",
@@ -157,10 +155,6 @@ router.get('/current', protectDeliveryPerson, async (req, res) => {
         }
     } catch (error) {
         console.error('[DELIVERY/CURRENT] Erro ao buscar entrega atual:', error);
-        // Garante que a mensagem de erro de coluna seja clara
-        if (error.code === 'ER_BAD_FIELD_ERROR') {
-             return res.status(500).json({ success: false, message: 'Erro interno: Colunas do Banco de Dados faltando. Execute o script de migração de endereço.' });
-        }
         res.status(500).json({ success: false, message: 'Erro interno ao buscar entrega atual.' });
     }
 });
