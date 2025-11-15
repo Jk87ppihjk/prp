@@ -1,188 +1,184 @@
-// ! Arquivo: trackingAndDataRoutes.js (Rotas 8, 10, 11, 13 - CORRIGIDO ROTA 10)
+// ! Arquivo: trackingService.js (CORRIGIDO: Lógica de Tracking para status 'Processing')
 
-const express = require('express');
-const router = express.Router();
 const pool = require('./config/db');
-const { protectSeller } = require('./sellerAuthMiddleware'); 
-const { protect } = require('./authMiddleware'); 
-
-// Importa o serviço de tracking e métricas
-const { 
-    getBuyerTrackingMessage, 
-    getSellerMetrics 
-} = require('./trackingService'); 
-
-// --- Constantes Comuns ---
-const MARKETPLACE_FEE_RATE = 0.05; // 5%
-const DELIVERY_FEE = 5.00;         // R$ 5,00
-
 
 // ===================================================================
-// ROTAS DE LISTAGEM DE PEDIDOS
+// FUNÇÕES AUXILIARES DE CÁLCULO
 // ===================================================================
 
 /**
- * Rota 10: Listar Pedidos da Loja (Para o Lojista)
- * CORREÇÃO: Adicionado d.status AS delivery_status
- * O lojista deve OBRIGATORIAMENTE pedir o código ao entregador.
+ * Converte um intervalo de tempo em segundos para um formato legível (Hh Mm Ss).
+ * @param {number} totalSeconds - O tempo total em segundos.
+ * @returns {string} Tempo formatado.
  */
-router.get('/orders/store/:storeId', protectSeller, async (req, res) => {
-    const storeId = req.params.storeId;
-    const sellerId = req.user.id;
+const formatTime = (totalSeconds) => {
+    if (totalSeconds === null) return 'N/A';
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = Math.floor(totalSeconds % 60);
 
-    const [storeCheck] = await pool.execute('SELECT seller_id FROM stores WHERE id = ? AND seller_id = ?', [storeId, sellerId]);
-    
-    if (storeCheck.length === 0) {
-        return res.status(403).json({ success: false, message: 'Acesso negado. Esta loja não pertence a você.' });
-    }
+    let parts = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
 
-    try {
-        const [orders] = await pool.execute(
-            `SELECT 
-                o.id, o.total_amount, o.status, o.delivery_method, o.created_at, o.delivery_code, 
-                d.status AS delivery_status, /* <-- CORREÇÃO: Status da entrega (Accepted, PickedUp) */
-                -- REMOVIDO: o.delivery_pickup_code (SEGURANÇA DO HANDOVER)
-                u.full_name AS buyer_name,
-                dp.full_name AS delivery_person_name
-             FROM orders o
-             JOIN users u ON o.buyer_id = u.id
-             LEFT JOIN deliveries d ON o.id = d.order_id
-             LEFT JOIN users dp ON d.delivery_person_id = dp.id
-             WHERE o.store_id = ?
-             ORDER BY o.created_at DESC`,
-            [storeId]
-        );
+    return parts.join(' ');
+};
+
+// ===================================================================
+// FUNÇÕES PRINCIPAIS DE CÁLCULO DE MÉTRICAS (Não Alteradas)
+// ===================================================================
+
+/**
+ * Calcula as métricas de embalagem e desempenho para um Vendedor (Seller).
+ * @param {number} sellerId - ID do Vendedor.
+ * @returns {Promise<object>} Métricas de desempenho.
+ */
+const getSellerMetrics = async (sellerId) => {
+    // 1. Métrica de Velocidade de Embalagem (Packing)
+    // Tempo = packing_start_time - created_at (Tempo entre a criação do pedido e o início da embalagem)
+    const [packingResults] = await pool.execute(`
+        SELECT AVG(TIMESTAMPDIFF(SECOND, o.created_at, d.packing_start_time)) AS avg_packing_time
+        FROM orders o
+        JOIN stores s ON o.store_id = s.id
+        JOIN deliveries d ON o.id = d.order_id
+        WHERE s.seller_id = ? AND d.packing_start_time IS NOT NULL;
+    `, [sellerId]);
+
+    // 2. Métrica de Velocidade de Despacho Próprio (Self-Delivery)
+    // Tempo = delivery_time - packing_start_time (Tempo total de entrega própria)
+    const [selfDeliveryResults] = await pool.execute(`
+        SELECT 
+            AVG(TIMESTAMPDIFF(SECOND, d.packing_start_time, d.delivery_time)) AS avg_delivery_time,
+            MIN(TIMESTAMPDIFF(SECOND, d.packing_start_time, d.delivery_time)) AS min_delivery_time,
+            MAX(TIMESTAMPDIFF(SECOND, d.packing_start_time, d.delivery_time)) AS max_delivery_time
+        FROM orders o
+        JOIN stores s ON o.store_id = s.id
+        JOIN deliveries d ON o.id = d.order_id
+        WHERE s.seller_id = ? AND o.delivery_method = 'Seller' AND d.delivery_time IS NOT NULL;
+    `, [sellerId]);
+
+    const metrics = {
+        avgPackingTime: formatTime(packingResults[0].avg_packing_time),
         
-        res.status(200).json({ success: true, orders: orders });
+        // Métricas de Entrega Própria
+        avgSelfDeliveryTime: formatTime(selfDeliveryResults[0].avg_delivery_time),
+        minSelfDeliveryTime: formatTime(selfDeliveryResults[0].min_delivery_time),
+        maxSelfDeliveryTime: formatTime(selfDeliveryResults[0].max_delivery_time),
+    };
 
-    } catch (error) {
-        console.error('[DELIVERY/STORE_ORDERS] Erro ao listar pedidos da loja:', error);
-        res.status(500).json({ success: false, message: 'Erro interno ao carregar pedidos.' });
-    }
-});
-
+    return metrics;
+};
 
 /**
- * Rota 11: Comprador lista seus pedidos (Retorna rastreamento detalhado)
- * (GET /api/delivery/orders/mine)
+ * Calcula as métricas de desempenho para um Entregador.
+ * @param {number} deliveryPersonId - ID do Entregador.
+ * @returns {Promise<object>} Métricas de desempenho.
  */
-router.get('/orders/mine', protect, async (req, res) => {
-    const buyerId = req.user.id; 
+const getDeliveryPersonMetrics = async (deliveryPersonId) => {
+    // 1. Métrica de Velocidade de Entrega (Delivery Speed)
+    // Tempo = delivery_time - pickup_time (Tempo desde a retirada até a entrega final)
+    const [deliveryResults] = await pool.execute(`
+        SELECT 
+            AVG(TIMESTAMPDIFF(SECOND, d.pickup_time, d.delivery_time)) AS avg_delivery_time,
+            MIN(TIMESTAMPDIFF(SECOND, d.pickup_time, d.delivery_time)) AS min_delivery_time,
+            MAX(TIMESTAMPDIFF(SECOND, d.pickup_time, d.delivery_time)) AS max_delivery_time
+        FROM deliveries d
+        WHERE d.delivery_person_id = ? AND d.delivery_time IS NOT NULL;
+    `, [deliveryPersonId]);
 
-    try {
-        // Junta dados de pedidos e dados de entrega para o rastreamento
-        const [orders] = await pool.execute(
-            `SELECT 
-                o.id, o.total_amount, o.status, o.delivery_method, o.created_at, o.delivery_code, 
-                s.name AS store_name,
-                d.status AS delivery_status,
-                d.packing_start_time, d.pickup_time,
-                dp.full_name AS delivery_person_name
-             FROM orders o
-             JOIN stores s ON o.store_id = s.id
-             LEFT JOIN deliveries d ON o.id = d.order_id
-             LEFT JOIN users dp ON d.delivery_person_id = dp.id
-             WHERE o.buyer_id = ?
-             ORDER BY o.created_at DESC`,
-            [buyerId]
-        );
+    // 2. Métrica de Velocidade de Retirada (Pickup Speed)
+    // Tempo = pickup_time - packing_start_time (Tempo desde que o lojista embalou até o entregador retirar)
+    const [pickupResults] = await pool.execute(`
+        SELECT AVG(TIMESTAMPDIFF(SECOND, d.packing_start_time, d.pickup_time)) AS avg_pickup_time
+        FROM deliveries d
+        WHERE d.delivery_person_id = ? AND d.pickup_time IS NOT NULL AND d.packing_start_time IS NOT NULL;
+    `, [deliveryPersonId]);
 
-        // Gera a mensagem de rastreamento detalhada para cada pedido
-        const ordersWithTracking = orders.map(order => {
-            const trackingMessage = getBuyerTrackingMessage(order, order);
+    const metrics = {
+        avgDeliveryTime: formatTime(deliveryResults[0].avg_delivery_time),
+        minDeliveryTime: formatTime(deliveryResults[0].min_delivery_time),
+        maxDeliveryTime: formatTime(deliveryResults[0].max_delivery_time),
+        avgPickupSpeed: formatTime(pickupResults[0].avg_pickup_time),
+    };
 
-            return {
-                ...order,
-                tracking_message: trackingMessage
-            };
-        });
-
-        res.status(200).json({ success: true, orders: ordersWithTracking });
-
-    } catch (error) {
-        console.error('[DELIVERY/BUYER_ORDERS] Erro ao listar pedidos do comprador:', error);
-        res.status(500).json({ success: false, message: 'Erro interno ao carregar pedidos.' });
-    }
-});
-
+    return metrics;
+};
 
 // ===================================================================
-// ROTAS DE STATUS E MÉTRICAS
+// FUNÇÃO DE RASTREAMENTO PARA COMPRADOR (Status em Texto)
 // ===================================================================
 
 /**
- * Rota 8: Checar Status do Pedido (para Polling)
- * (GET /api/delivery/orders/:orderId/status)
+ * Gera a mensagem de status de rastreamento para o comprador.
+ * @param {object} order - O registro do pedido (com status, delivery_method, etc.).
+ * @param {object} delivery - O registro de entrega associado (com delivery_person_id).
+ * @returns {string} Mensagem detalhada para o comprador.
  */
-router.get('/orders/:orderId/status', protect, async (req, res) => {
-    const orderId = req.params.orderId;
-    const buyerId = req.user.id;
+const getBuyerTrackingMessage = (order, delivery) => {
+    let message = '';
 
-    try {
-        const [orderRows] = await pool.execute(
-            `SELECT o.status, o.delivery_code, d.delivery_person_id, d.packing_start_time, d.pickup_time, d.status AS delivery_status
-             FROM orders o
-             LEFT JOIN deliveries d ON o.id = d.order_id
-             WHERE o.id = ? AND o.buyer_id = ?`,
-            [orderId, buyerId]
-        );
+    if (order.status === 'Pending Payment') {
+        return 'Aguardando confirmação de pagamento.';
+    }
+    
+    if (order.status === 'Completed') {
+        return 'Pedido concluído! Recebimento confirmado.';
+    }
+    
+    if (order.status === 'Processing') {
+        // Vendedor está embalando
+        
+        // Se o delivery_method é nulo (estado inicial), fornece uma mensagem padrão.
+        if (order.delivery_method === 'Seller') {
+             message = 'O lojista confirmou o pagamento e está preparando seu pedido (Entrega Própria).';
+        } else if (order.delivery_method === 'Contracted' || order.delivery_method === 'Marketplace') {
+             message = 'O lojista confirmou o pagamento e está preparando o pedido para a retirada do entregador.';
+        } else {
+             // CORREÇÃO: Trata o caso em que delivery_method é NULL (pós-pagamento, pré-despacho).
+             message = 'Seu pagamento foi confirmado. O lojista está iniciando a separação e embalagem do pedido.';
+        }
+        return message;
+    }
 
-        const order = orderRows[0];
+    if (order.status === 'Delivering') {
+        const dpAssigned = delivery && delivery.delivery_person_id;
 
-        if (!order) {
-            return res.status(440).json({ success: false, message: 'Pedido não encontrado ou não pertence a você.' });
+        // --- Fluxo Vendedor ---
+        if (order.delivery_method === 'Seller') {
+            return 'O lojista já despachou seu pedido (Entrega Própria). Aguarde a chegada.';
         }
 
-        const trackingMessage = getBuyerTrackingMessage(order, order);
+        // --- Fluxo Entregador ---
+        if (order.delivery_method === 'Marketplace' || order.delivery_method === 'Contracted') {
+            
+            // 1. Procurando Entregador
+            if (!dpAssigned) {
+                return 'Estamos buscando um entregador disponível. Agradecemos a paciência.';
+            }
 
-        res.status(200).json({ 
-            success: true, 
-            status: order.status, 
-            delivery_code: order.delivery_code,
-            tracking_message: trackingMessage
-        });
+            // 2. Encontrado/Contratado, mas não Retirou
+            // O campo delivery.status deve vir da tabela deliveries (d.status)
+            if (dpAssigned && delivery.delivery_status === 'Accepted' && !delivery.pickup_time) {
+                return 'Encontramos um entregador disponível! Ele está a caminho da loja para retirar seu pedido.';
+            }
 
-    } catch (error) {
-        console.error('[STATUS] Erro ao checar status do pedido:', error.message);
-        res.status(500).json({ success: false, message: 'Erro interno.' });
-    }
-});
-
-
-/**
- * Rota 13: Obter Saldo e Métricas do Vendedor (Financeiro)
- * (GET /api/delivery/users/seller/metrics)
- */
-router.get('/users/seller/metrics', protectSeller, async (req, res) => {
-    const sellerId = req.user.id; 
-
-    try {
-        const [userRows] = await pool.execute(
-            "SELECT pending_balance, total_delivered_orders FROM users WHERE id = ?", 
-            [sellerId]
-        );
-        const user = userRows[0];
+            // 3. Retirado
+            if (dpAssigned && delivery.pickup_time) {
+                return 'O entregador já retirou seu pedido na loja e está em rota de entrega!';
+            }
+        }
         
-        const metrics = await getSellerMetrics(sellerId);
-        
-        res.status(200).json({
-            success: true,
-            balance: {
-                pending_balance: user.pending_balance || 0,
-            },
-            financial_info: {
-                marketplace_fee_rate: MARKETPLACE_FEE_RATE * 100,
-                delivery_fee_paid_by_marketplace: DELIVERY_FEE,
-                pricing_note: "Lembrete: o Marketplace adiciona R$10,00 no preço final para auxiliar na cobertura da taxa de serviço (5%) e da taxa de entrega (R$5,00) se for via Marketplace.",
-            },
-            metrics: metrics
-        });
-
-    } catch (error) {
-        console.error('[METRICS/SELLER] Erro ao obter métricas do vendedor:', error.message);
-        res.status(500).json({ success: false, message: 'Erro interno ao buscar métricas.' });
+        return 'Seu pedido está em trânsito. Consulte o status detalhado.';
     }
-});
+
+    return 'Status desconhecido.';
+};
 
 
-module.exports = router;
+module.exports = {
+    getSellerMetrics,
+    getDeliveryPersonMetrics,
+    getBuyerTrackingMessage,
+    formatTime,
+};
