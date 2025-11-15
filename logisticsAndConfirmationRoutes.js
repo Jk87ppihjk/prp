@@ -114,7 +114,6 @@ router.get('/current', protectDeliveryPerson, async (req, res) => {
                 u.full_name AS buyer_name, 
                 s.name AS store_name, s.address_line1 AS store_address,
                 d.delivery_time, d.pickup_time, d.packing_start_time, d.delivery_person_id,
-                d.delivery_code, d.delivery_pickup_code,
                 CONCAT(o.delivery_address_street, ', ', o.delivery_address_number) AS delivery_address
              FROM deliveries d
              JOIN orders o ON d.order_id = o.id
