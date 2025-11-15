@@ -1,22 +1,38 @@
-// ! Arquivo: userRoutes.js (Novo arquivo para gestão de dados do comprador/usuário)
+// ! Arquivo: userRoutes.js (Rotas para o Comprador/Usuário)
+
 const express = require('express');
 const router = express.Router();
-const pool = require('./config/db'); // Importa o pool central
+const pool = require('./config/db');
 const { protect } = require('./authMiddleware'); // Importa a middleware de autenticação
 
-// -------------------------------------------------------------------
-// ROTAS DO USUÁRIO COMUM (COMPRADOR)
-// -------------------------------------------------------------------
+/**
+ * Rota GET /api/user/me
+ * Objetivo: Permitir que o frontend (ex: checkout.html) busque os dados
+ * completos do usuário logado, incluindo o endereço cadastrado.
+ */
+router.get('/user/me', protect, async (req, res) => {
+    // O middleware 'protect' já executou a busca no banco de dados 
+    // e anexou os dados do usuário (incluindo o endereço) em 'req.user'.
+    
+    if (!req.user) {
+        // Esta verificação é uma segurança extra, embora 'protect' já trate isso.
+        return res.status(404).json({ success: false, message: 'Usuário não encontrado na sessão.' });
+    }
+    
+    // Retorna o objeto 'user' completo que o 'protect' buscou
+    res.status(200).json({ success: true, user: req.user });
+});
 
 /**
  * Rota PUT /api/user/address
- * Objetivo: Permitir que o usuário preencha o endereço obrigatório (acionado pelo protectWithAddress).
+ * Objetivo: Permitir que o usuário (comprador) salve ou atualize 
+ * seu endereço segmentado (usado por address_setup.html).
  */
 router.put('/user/address', protect, async (req, res) => {
     // ID do usuário logado (garantido pelo middleware 'protect')
     const userId = req.user.id; 
     
-    // Novos campos de endereço segmentado e WhatsApp
+    // Campos de endereço segmentado e WhatsApp vindos do frontend
     const { 
         city_id, 
         district_id, 
@@ -54,7 +70,7 @@ router.put('/user/address', protect, async (req, res) => {
         );
 
         if (result.affectedRows === 0) {
-            // Isso só deve acontecer se o ID do usuário não existir, o que é improvável
+            // Isso só deve acontecer se o ID do usuário não existir
             return res.status(404).json({ success: false, message: 'Usuário não encontrado.' });
         }
 
@@ -69,7 +85,5 @@ router.put('/user/address', protect, async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro interno ao salvar endereço.' });
     }
 });
-
-// Você pode adicionar outras rotas de usuário aqui, se necessário.
 
 module.exports = router;
