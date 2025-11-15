@@ -1,17 +1,15 @@
-// ! Arquivo: trackingAndDataRoutes.js (Rotas 8, 10, 11, 13)
+// ! Arquivo: trackingAndDataRoutes.js (Rotas 8, 10, 11, 13 - CORRIGIDO SEGURANÇA NA ROTA 10)
 
 const express = require('express');
 const router = express.Router();
 const pool = require('./config/db');
 const { protectSeller } = require('./sellerAuthMiddleware'); 
-const { protectDeliveryPerson } = require('./deliveryAuthMiddleware');
 const { protect } = require('./authMiddleware'); 
 
 // Importa o serviço de tracking e métricas
 const { 
     getBuyerTrackingMessage, 
-    getSellerMetrics, 
-    getDeliveryPersonMetrics 
+    getSellerMetrics 
 } = require('./trackingService'); 
 
 // --- Constantes Comuns ---
@@ -24,8 +22,9 @@ const DELIVERY_FEE = 5.00;         // R$ 5,00
 // ===================================================================
 
 /**
- * Rota 10: Listar Pedidos da Loja (GET /api/delivery/orders/store/:storeId)
- * USADA PELO painel.html
+ * Rota 10: Listar Pedidos da Loja (Para o Lojista)
+ * AJUSTE CRUCIAL: O campo o.delivery_pickup_code FOI REMOVIDO da query.
+ * O lojista deve OBRIGATORIAMENTE pedir o código ao entregador.
  */
 router.get('/orders/store/:storeId', protectSeller, async (req, res) => {
     const storeId = req.params.storeId;
@@ -40,7 +39,8 @@ router.get('/orders/store/:storeId', protectSeller, async (req, res) => {
     try {
         const [orders] = await pool.execute(
             `SELECT 
-                o.id, o.total_amount, o.status, o.delivery_method, o.created_at, o.delivery_code, o.delivery_pickup_code,
+                o.id, o.total_amount, o.status, o.delivery_method, o.created_at, o.delivery_code, 
+                -- REMOVIDO: o.delivery_pickup_code (SEGURANÇA DO HANDOVER)
                 u.full_name AS buyer_name,
                 dp.full_name AS delivery_person_name
              FROM orders o
@@ -62,8 +62,8 @@ router.get('/orders/store/:storeId', protectSeller, async (req, res) => {
 
 
 /**
- * Rota 11: Comprador lista seus pedidos (GET /api/delivery/orders/mine)
- * USADA PELO my_orders.html
+ * Rota 11: Comprador lista seus pedidos (Retorna rastreamento detalhado)
+ * (GET /api/delivery/orders/mine)
  */
 router.get('/orders/mine', protect, async (req, res) => {
     const buyerId = req.user.id; 
@@ -72,7 +72,7 @@ router.get('/orders/mine', protect, async (req, res) => {
         // Junta dados de pedidos e dados de entrega para o rastreamento
         const [orders] = await pool.execute(
             `SELECT 
-                o.id, o.total_amount, o.status, o.delivery_method, o.created_at, o.delivery_code, o.delivery_pickup_code,
+                o.id, o.total_amount, o.status, o.delivery_method, o.created_at, o.delivery_code, 
                 s.name AS store_name,
                 d.status AS delivery_status,
                 d.packing_start_time, d.pickup_time,
@@ -111,16 +111,15 @@ router.get('/orders/mine', protect, async (req, res) => {
 
 /**
  * Rota 8: Checar Status do Pedido (para Polling)
- * Retorna status e a mensagem de rastreamento detalhada.
+ * (GET /api/delivery/orders/:orderId/status)
  */
 router.get('/orders/:orderId/status', protect, async (req, res) => {
     const orderId = req.params.orderId;
     const buyerId = req.user.id;
 
     try {
-        // Busca pedidos e dados de entrega para o tracking
         const [orderRows] = await pool.execute(
-            `SELECT o.status, o.delivery_code, d.delivery_person_id, d.packing_start_time, d.pickup_time
+            `SELECT o.status, o.delivery_code, d.delivery_person_id, d.packing_start_time, d.pickup_time, d.status AS delivery_status
              FROM orders o
              LEFT JOIN deliveries d ON o.id = d.order_id
              WHERE o.id = ? AND o.buyer_id = ?`,
@@ -133,7 +132,6 @@ router.get('/orders/:orderId/status', protect, async (req, res) => {
             return res.status(404).json({ success: false, message: 'Pedido não encontrado ou não pertence a você.' });
         }
 
-        // NOVO: Gera a mensagem detalhada de rastreamento
         const trackingMessage = getBuyerTrackingMessage(order, order);
 
         res.status(200).json({ 
@@ -151,7 +149,8 @@ router.get('/orders/:orderId/status', protect, async (req, res) => {
 
 
 /**
- * Rota 13: Obter Saldo e Métricas do Vendedor (GET /api/delivery/users/seller/metrics)
+ * Rota 13: Obter Saldo e Métricas do Vendedor (Financeiro)
+ * (GET /api/delivery/users/seller/metrics)
  */
 router.get('/users/seller/metrics', protectSeller, async (req, res) => {
     const sellerId = req.user.id; 
